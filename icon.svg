@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#2c2c2e"/>
+  <circle cx="256" cy="228" r="118" fill="#ffd63a"/>
+  <text x="256" y="272" font-family="Apple SD Gothic Neo, Noto Sans KR, sans-serif"
+        font-size="140" font-weight="800" fill="#3d3300" text-anchor="middle">주</text>
+  <rect x="118" y="392" width="276" height="26" rx="13" fill="#ffffff" opacity=".85"/>
+</svg>

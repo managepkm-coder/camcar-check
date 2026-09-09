@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e9e7ee">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="근무표">
+<title>근무표</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon.svg">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<main class="card">
+  <header>
+    <button class="icon" id="btnSettings" aria-label="설정">⚙</button>
+    <div class="nav">
+      <button class="arrow" id="prev" aria-label="이전 달">‹</button>
+      <h1 id="ym">—</h1>
+      <button class="arrow" id="next" aria-label="다음 달">›</button>
+    </div>
+    <button class="icon" id="today" aria-label="오늘로">⟳</button>
+    <div id="sub"></div>
+  </header>
+
+  <div class="dow"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+  <div id="grid"></div>
+</main>
+
+<dialog id="settings">
+  <h2>내 근무 맞추기</h2>
+  <p>오늘의 근무를 고르면 나머지 날짜가 모두 맞춰집니다.</p>
+  <div class="row" id="offsetBtns"></div>
+  <button class="txt" id="resetAll">직접 지정한 날짜 모두 지우기</button>
+  <button class="txt" onclick="this.closest('dialog').close()">닫기</button>
+</dialog>
+
+<dialog id="daySheet">
+  <h2 id="dayTitle"></h2>
+  <p>이 날의 근무를 직접 바꿉니다. (교대·연차용)</p>
+  <div class="row">
+    <button class="badge ju  pick" data-set="0">주</button>
+    <button class="badge ya  pick" data-set="1">야</button>
+    <button class="badge bi  pick" data-set="2">비</button>
+    <button class="badge hyu pick" data-set="3">휴</button>
+    <button class="badge off pick" data-set="연">연</button>
+  </div>
+  <button class="txt" data-set="clear">기본값으로 되돌리기</button>
+  <button class="txt" onclick="this.closest('dialog').close()">닫기</button>
+</dialog>
+
+<script src="./holidays.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
