@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">근무표</string>
+    <string name="widget_desc">오늘과 앞으로 나흘의 교대 근무를 표시합니다</string>
+    <string name="pick_title">오늘의 근무를 선택하세요</string>
+    <string name="pick_hint">한 번만 맞추면 나머지 날짜는 자동으로 계산됩니다.</string>
+</resources>
