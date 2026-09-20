@@ -1,0 +1,86 @@
+name: Publish blog post
+
+on:
+  schedule:
+    # 매주 월·목 한국시간 오전 8시 (UTC 23:00 전날)
+    - cron: '0 23 * * 0,3'
+  workflow_dispatch:
+    inputs:
+      count:
+        description: '이번에 쓸 글 수'
+        required: false
+        default: '1'
+      dry_run:
+        description: '발행하지 않고 원고만 생성'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  write-and-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: blog/package-lock.json
+
+      - name: Install dependencies
+        working-directory: blog
+        run: npm ci
+
+      - name: Run tests
+        working-directory: blog
+        run: npm test
+
+      - name: Write and publish
+        working-directory: blog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 워드프레스 발행을 켰을 때만 쓰입니다 (없으면 빈 값).
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+        run: |
+          node src/cli.js run \
+            --count "${{ github.event.inputs.count || '1' }}" \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+
+      - name: Commit generated posts
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add blog/content blog/posts blog/index.html blog/feed.xml blog/topics.json
+          if git diff --staged --quiet; then
+            echo "새로 발행된 글이 없습니다."
+          else
+            git commit -m "블로그: 새 글 발행 ($(date -u '+%Y-%m-%d'))"
+            git push
+          fi
+
+      # 배포 아티팩트에 의존성 폴더가 딸려 가지 않도록 지웁니다.
+      - name: Clean build inputs
+        run: rm -rf blog/node_modules
+
+      # 푸시로는 pages.yml 이 다시 돌지 않으므로(GITHUB_TOKEN 제한) 여기서 바로 배포합니다.
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deploy
+        uses: actions/deploy-pages@v4

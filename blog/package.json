@@ -1,0 +1,22 @@
+{
+  "name": "blog-automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Claude로 블로그 글을 생성하고 자동 발행하는 프로그램",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "blog": "./src/cli.js" },
+  "scripts": {
+    "run": "node src/cli.js run",
+    "generate": "node src/cli.js generate",
+    "publish": "node src/cli.js publish",
+    "build": "node src/cli.js build",
+    "topics": "node src/cli.js topics",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
+    "marked": "^18.0.0",
+    "zod": "^4.0.0"
+  }
+}
