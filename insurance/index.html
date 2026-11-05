@@ -43,6 +43,7 @@
 <dialog id="dlgPolicy" class="sheet">
 <form id="fPolicy" novalidate>
   <h2 id="pTitle">보험 추가</h2>
+  <button type="button" class="btn scanbtn" id="pScan" data-act="scan">📷 사진으로 한 번에 등록<small>보험증권 · 보험 앱 캡처 · 손으로 적은 표 (여러 건 가능)</small></button>
 
   <fieldset>
     <legend>누구 보험인가요? <small>(보장받는 사람)</small></legend>
@@ -62,7 +63,7 @@
   </div>
 
   <div class="grid2">
-    <label>납입 시작 <small>계약월</small><input id="p-start" type="month" placeholder="2018-03"></label>
+    <label>납입 시작 <small>모르면 비움</small><input id="p-start" type="month" placeholder="2018-03"></label>
     <label>납입 기간<span class="unit"><input id="p-years" type="number" inputmode="decimal" min="0" step="any" placeholder="20">년</span></label>
   </div>
   <div class="quick" aria-label="납입 기간 빠른 선택">
@@ -144,6 +145,14 @@
     <button class="btn" data-act="csvTemplate">엑셀 입력 양식</button>
   </div>
 
+  <h3>사진으로 등록 (AI)</h3>
+  <p class="note">사진을 Claude(AI)가 읽어 보험을 채워 줘요. 본인 Claude API 키가 필요하고, 사진 1장에 대략 100~300원의 API 요금이 들어요.</p>
+  <p class="keystate">API 키: <b id="keyState"></b></p>
+  <div class="btns">
+    <button class="btn" data-act="editKey">키 넣기 · 바꾸기</button>
+    <button class="btn danger" data-act="delKey" id="btnKeyDel">키 지우기</button>
+  </div>
+
   <h3>보험 목록 자동으로 불러오기?</h3>
   <p class="note">
     뱅크샐러드·토스는 금융위원회 <b>마이데이터 허가</b>를 받은 회사만 쓸 수 있는 통로로 보험사 데이터를 받아와요.
@@ -151,6 +160,7 @@
   </p>
   <ol class="note">
     <li><a href="https://www.credit4u.or.kr" target="_blank" rel="noopener">내보험다보여(신용정보원) ↗</a>에서 본인 명의 보험을 한 번에 조회해 옮겨 적기 (가족은 각자 본인인증)</li>
+    <li>보험 앱 화면이나 보험증권을 캡처해서 ‘사진으로 등록’</li>
     <li>보험 앱의 ‘○% 납부 · ○원 남음’ 숫자로 납입기간 계산하기 (보험 추가 화면)</li>
     <li>엑셀 양식에 한꺼번에 적어서 ‘불러오기’</li>
   </ol>
@@ -164,6 +174,63 @@
 </div>
 </dialog>
 
+<!-- 사진으로 등록 -->
+<dialog id="dlgScan" class="sheet">
+<div class="in">
+  <section data-step="key">
+    <h2>사진으로 보험 등록</h2>
+    <p class="note">보험증권, 보험 앱 캡처, 손으로 적은 표 사진을 올리면 AI(Claude)가 보험사·월 납입액·납입기간을 읽어 채워 줘요. 등록 전에 한 번 확인하고 고칠 수 있어요.</p>
+    <div class="howto">
+      <b>처음 한 번만: Claude API 키 넣기</b>
+      <ol class="note">
+        <li><a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">Claude 콘솔 ↗</a>에 가입하고 결제(크레딧 충전)를 등록</li>
+        <li><b>API Keys → Create Key</b> 를 눌러 나온 키를 복사</li>
+        <li>아래 칸에 붙여넣기</li>
+      </ol>
+      <p class="note">사진 1장 읽는 데 대략 100~300원이 들어요. 키는 이 폰에만 저장되고 백업 파일에는 들어가지 않아요. 사진은 읽기 위해 Anthropic(Claude 회사)으로 보내져요.</p>
+    </div>
+    <label>API 키<input id="s-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-..."></label>
+    <p class="err" id="s-key-err" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>취소</button>
+      <button type="button" class="btn primary" data-act="saveKey">저장하고 사진 고르기</button>
+    </div>
+  </section>
+
+  <section data-step="busy" hidden>
+    <h2>사진 읽는 중</h2>
+    <div class="thumbs" id="s-thumbs"></div>
+    <div class="spin" aria-hidden="true"></div>
+    <p class="note center" id="s-busy-msg"></p>
+    <button type="button" class="btn wide" data-act="cancelScan">취소</button>
+  </section>
+
+  <section data-step="review" hidden>
+    <h2 id="s-title"></h2>
+    <p class="note" id="s-note"></p>
+    <p class="note">AI가 읽은 내용이라 틀릴 수 있어요. 금액과 연도를 확인하고 등록하세요.</p>
+    <div id="s-rows"></div>
+    <p class="err" id="s-err" role="alert"></p>
+    <div class="actions sticky">
+      <button type="button" class="btn" data-act="scanMore">다른 사진</button>
+      <button type="button" class="btn primary" data-act="saveScan" id="s-save">등록</button>
+    </div>
+  </section>
+
+  <section data-step="error" hidden>
+    <h2>사진을 읽지 못했어요</h2>
+    <p class="note pre" id="s-error-msg"></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>닫기</button>
+      <button type="button" class="btn" data-act="editKey" id="s-error-key">키 다시 넣기</button>
+      <button type="button" class="btn primary" data-act="scanMore">다시 고르기</button>
+    </div>
+  </section>
+</div>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+<input type="file" id="scanFile" accept="image/*" multiple hidden>
 <datalist id="insurerList"></datalist>
 <input type="file" id="fileIn" accept=".json,.csv,application/json,text/csv" hidden>
 

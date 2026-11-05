@@ -73,7 +73,7 @@ function normalize(d) {
     used.add(m.slot);
   }
   const ids = new Set(members.map((m) => m.id));
-  const policies = (Array.isArray(d.policies) ? d.policies : []).filter((p) => p && ym(p.start) != null).map((p) => ({
+  const policies = (Array.isArray(d.policies) ? d.policies : []).filter((p) => p && typeof p === 'object').map((p) => ({
     id: String(p.id || uid()),
     who: ids.has(p.who) ? p.who : members[0].id,
     insurer: String(p.insurer || ''), name: String(p.name || p.insurer || '보험'), product: String(p.product || ''),
@@ -104,23 +104,31 @@ function compute(p) {
 
   let status = 'paying';
   if (c != null && c <= NOW) status = 'cancelled';
-  else if (NOW < s) status = 'before';
+  else if (s != null && NOW < s) status = 'before';
   else if (e != null && NOW > e) status = 'done';
 
-  const totalN = e != null ? Math.max(0, Math.floor((e - s) / per) + 1) : Infinity;
-  const paidN = Math.max(0, Math.min(totalN, Math.floor((Math.min(NOW, e ?? NOW) - s) / per) + 1));
-  const remainN = status === 'cancelled' ? 0 : totalN - paidN;
+  let totalN = Infinity, paidN = null, remainN;
+  if (s != null) {
+    totalN = e != null ? Math.max(0, Math.floor((e - s) / per) + 1) : Infinity;
+    paidN = Math.max(0, Math.min(totalN, Math.floor((Math.min(NOW, e ?? NOW) - s) / per) + 1));
+    remainN = totalN - paidN;
+  } else {
+    // 시작 월을 모르면 낸 횟수는 모르고, 남은 횟수만 끝 월로 계산한다
+    remainN = e != null ? Math.max(0, Math.floor((e - NOW) / per)) : Infinity;
+  }
+  if (status === 'cancelled') remainN = 0;
   return {
     s, e, c, per, status, totalN, paidN, remainN,
     monthly: p.premium / per, // 연납은 월로 환산
-    paidAmt: paidN * p.premium,
+    paidAmt: (paidN ?? 0) * p.premium,
     remainAmt: Number.isFinite(remainN) ? remainN * p.premium : null,
-    pct: Number.isFinite(totalN) && totalN > 0 ? paidN / totalN : null,
+    pct: paidN != null && Number.isFinite(totalN) && totalN > 0 ? paidN / totalN : null,
     left: e != null ? Math.max(0, e - NOW) : null, // 이번 달 다음부터 남은 개월
   };
 }
 const payLabel = (k) => {
   if (k.e == null) return '갱신형';
+  if (k.s == null) return '';
   const n = k.e - k.s + 1;
   return n % 12 === 0 ? `${n / 12}년납` : `${dur(n)}납`;
 };
@@ -170,10 +178,11 @@ function renderChips() {
 }
 
 function summaryHTML(list) {
-  let monthly = 0, paid = 0, remain = 0, nPay = 0, nDone = 0, nOpen = 0;
+  let monthly = 0, paid = 0, remain = 0, nPay = 0, nDone = 0, nOpen = 0, nNoStart = 0;
   for (const p of list) {
     const k = calc(p);
     paid += k.paidAmt;
+    if (k.paidN == null) nNoStart++;
     if (k.status === 'paying') { monthly += k.monthly; nPay++; }
     if (k.status === 'done') nDone++;
     if (k.status === 'paying' || k.status === 'before') { if (k.remainAmt == null) nOpen++; else remain += k.remainAmt; }
@@ -200,7 +209,7 @@ function summaryHTML(list) {
     <div class="sum-sub">1년이면 ${manwon(monthly * 12)} · 내는 중 ${nPay}건${nDone ? ` · 완납 ${nDone}건` : ''}</div>
     ${family}
     <div class="stats">
-      <div><small>지금까지 낸 돈</small><b>${manwon(paid)}</b></div>
+      <div><small>지금까지 낸 돈</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
       <div><small>앞으로 낼 돈</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
     </div>
   </div>`;
@@ -210,7 +219,8 @@ function summaryHTML(list) {
 function timelineHTML(list) {
   let rows = list.map((p) => ({ p, k: calc(p), m: member(p.who) }));
   // 지난 일은 최근 4년만 보여 주고, 화면 폭은 앞으로 남은 기간에 쓴다
-  let d0 = Math.max(Math.min(...rows.map((r) => r.k.s)), NOW - 48);
+  const starts = rows.map((r) => r.k.s).filter((s) => s != null);
+  let d0 = Math.max(starts.length ? Math.min(...starts) : NOW - 48, NOW - 48);
   let d1 = NOW + 12;
   for (const { k } of rows) if (k.e != null) d1 = Math.max(d1, k.e + 1);
   d1 += 24;
@@ -245,13 +255,13 @@ function timelineHTML(list) {
     }
     if (k.status === 'paying') total += k.monthly;
     const open = k.e == null;
-    const x0 = X(k.s), x1 = open ? 100 : X(k.e + 1);
-    const cut = k.s < d0; // 화면 왼쪽보다 먼저 시작
+    const x0 = k.s != null ? X(k.s) : 0, x1 = open ? 100 : X(k.e + 1);
+    const cut = k.s == null || k.s < d0; // 화면 왼쪽보다 먼저 시작했거나 시작 월을 모름
     let marks = `<i class="bar${open ? ' open' : ''}${cut ? ' cut' : ''}${k.status === 'done' ? ' done' : ''}" style="left:${pc(x0)};width:${pc(Math.max(x1 - x0, 0.6))}"></i>`;
     if (!open) marks += `<i class="dot${k.status === 'done' ? ' done' : ''}" style="left:${pc(x1)}"></i>`;
 
     const ps = ym(p.payStart);
-    let tip = `${p.name} · ${ymDot(k.s)} ~ ${open ? '계속' : ymDot(k.e)} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원`;
+    let tip = `${p.name} · ${k.s != null ? ymDot(k.s) : '시작 모름'} ~ ${open ? '계속' : ymDot(k.e)} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원`;
     if (ps != null) {
       const pe = p.payYears ? ps + p.payYears * 12 : d1;
       marks += `<i class="recv${pe >= d1 ? ' open' : ''}" style="left:${pc(X(ps))};width:${pc(Math.max(X(pe) - X(ps), 0.6))}"></i>`;
@@ -284,15 +294,22 @@ function timelineHTML(list) {
 function cardHTML(p) {
   const k = calc(p), m = member(p.who);
   const ageEnd = k.e != null ? ageAt(m, k.e) : null;
-  const period = `${ymDot(k.s)} ~ ${k.e != null ? ymDot(k.e) + (ageEnd != null ? `(${ageEnd}세)` : '') : '계속'} · ${payLabel(k)}`;
+  const pl = payLabel(k);
+  const period = `${k.s != null ? ymDot(k.s) : '시작 ?'} ~ ${k.e != null ? ymDot(k.e) + (ageEnd != null ? `(${ageEnd}세)` : '') : '계속'}${pl ? ` · ${pl}` : ''}`;
   const when = k.status === 'paying' ? (k.left != null ? (k.left ? `완납까지 ${dur(k.left)}` : '이번 달이 마지막') : '')
     : k.status === 'before' ? `${ymDot(k.s)} 시작` : '';
 
   let meter = '', foot;
   if (k.status === 'cancelled') {
-    foot = `<span>해지 ${ymDot(k.c)}</span><span>${won(k.paidAmt)}원 냄</span>`;
+    foot = `<span>해지 ${ymDot(k.c)}</span><span>${k.paidN != null ? `${won(k.paidAmt)}원 냄` : ''}</span>`;
   } else if (k.e == null) {
-    foot = `<span>계속 납입 · ${k.paidN}회째</span><span>지금까지 ${won(k.paidAmt)}원</span>`;
+    foot = k.paidN != null
+      ? `<span>계속 납입 · ${k.paidN}회째</span><span>지금까지 ${won(k.paidAmt)}원</span>`
+      : '<span>계속 납입 · 시작 월 모름</span><span></span>';
+  } else if (k.pct == null) {
+    foot = k.status === 'done'
+      ? '<span class="ok">✓ 납입완료</span><span></span>'
+      : `<span>시작 월 모름 · 남은 ${k.remainN}회</span><span>${won(k.remainAmt)}원 남음</span>`;
   } else {
     const pct = k.pct * 100;
     meter = `<div class="meter${k.status === 'done' ? ' done' : ''}"><i style="width:${pct.toFixed(1)}%"></i></div>`;
@@ -367,8 +384,9 @@ function payoutsHTML(list) {
 function emptyHTML() {
   return `<div class="card empty">
     <h2>보험을 추가해 보세요</h2>
-    <p>월 납입액과 납입기간만 넣으면 매달 얼마가 나가는지, 언제 다 내는지 한눈에 보여 드려요.</p>
-    <button class="btn primary wide" data-act="add">＋ 첫 보험 추가</button>
+    <p>월 납입액과 납입기간만 넣으면 매달 얼마가 나가는지, 언제 다 내는지 한눈에 보여 드려요. 보험증권·보험 앱 캡처·손으로 적은 표 사진을 올리면 AI가 읽어서 채워 줘요.</p>
+    <button class="btn primary wide" data-act="scan">📷 사진으로 등록</button>
+    <button class="btn wide" data-act="add">＋ 직접 입력</button>
     <button class="btn wide" data-act="sample">예시 데이터로 둘러보기</button>
     <div class="howto"><b>가입한 보험이 기억 안 나면?</b>
       <p><a href="https://www.credit4u.or.kr" target="_blank" rel="noopener">내보험다보여(신용정보원) ↗</a>에서 본인 명의 보험을 한 번에 조회할 수 있어요.</p></div>
@@ -401,6 +419,7 @@ function openPolicy(id) {
   $('#p-helper').open = false;
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
+  $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
   fromEnd(); syncOpen(); premiumHint();
   dlgP.showModal();
@@ -424,6 +443,14 @@ function premiumHint() {
   $('#p-premium-hint').textContent = n >= 10000 ? manwon(n) : '';
 }
 
+/** 납부율과 남은 횟수 → 전체 횟수. 계약은 보통 1년 단위라 월납에서 ±1회 차이는 맞춰 준다 (61회 → 60회) */
+function totalFrom(left, pct, per) {
+  let total = Math.round(left / (1 - pct / 100));
+  const snap = Math.round(total / 12) * 12;
+  if (per === 1 && snap >= 12 && Math.abs(snap - total) <= 1) total = snap;
+  return Math.max(total, left);
+}
+
 /* 보험 앱의 "34.4% 납부 · 17,593,480원 남음" → 납입 시작/끝 */
 function calcRemain() {
   const prem = digits($('#p-premium').value), remain = digits($('#h-remain').value);
@@ -437,7 +464,7 @@ function calcRemain() {
   $('#p-end').value = ymStr(end);
   $('#p-open').checked = false; syncOpen();
   if (pct > 0 && pct < 100) {
-    const total = Math.round(left / (1 - pct / 100));
+    const total = totalFrom(left, pct, per);
     const paid = total - left;
     const start = NOW - (paid - 1) * per;
     $('#p-start').value = ymStr(start);
@@ -446,6 +473,15 @@ function calcRemain() {
     out.textContent = `→ 납입 끝 ${ymDot(end)} (남은 ${left}회). 납입 시작 월은 직접 넣어 주세요.`;
   }
   fromEnd();
+}
+
+/** 저장 전에 빠진 값 확인. 시작 월은 몰라도 되지만, 끝 월(또는 갱신형)은 있어야 한다 */
+function policyError(p, open) {
+  return !p.insurer ? '보험사를 넣어 주세요.'
+    : !p.premium ? '납입액을 넣어 주세요.'
+    : !open && !p.end ? '납입 끝 월(또는 시작 월 + 기간)을 넣거나, 갱신형이면 체크해 주세요.'
+    : p.start && p.end && ym(p.end) < ym(p.start) ? '납입 끝이 시작보다 빨라요.'
+    : '';
 }
 
 $('#fPolicy').addEventListener('submit', (e) => {
@@ -463,12 +499,7 @@ $('#fPolicy').addEventListener('submit', (e) => {
     cancel: ymStr(ym(v('cancel'))), memo: v('memo'),
   };
   if (!p.name && p.insurer) p.name = `${p.insurer.replace(/(생명|화재|손해보험|라이프)$/, '')} ${p.type}`.trim();
-  const err = !p.insurer ? '보험사를 넣어 주세요.'
-    : !p.premium ? '납입액을 넣어 주세요.'
-    : !p.start ? '납입 시작 월을 넣어 주세요.'
-    : !open && !p.end ? '납입 기간(년)이나 납입 끝 월을 넣거나, 갱신형이면 체크해 주세요.'
-    : p.end && ym(p.end) < ym(p.start) ? '납입 끝이 시작보다 빨라요.'
-    : '';
+  const err = policyError(p, open);
   if (err) { $('#p-err').textContent = err; return; }
   if (editing) Object.assign(editing, p); else db.policies.push(p);
   save(); dlgP.close(); render(); persist();
@@ -541,7 +572,7 @@ function toCSV(policies) {
     lines.push(csvLine(CSV_COLS.map(([key]) => {
       if (key === 'who') return member(p.who).name;
       if (key === 'cycle') return p.cycle === 'Y' ? '연납' : '월납';
-      if (key === 'years') return p.end ? +((k.e - k.s + 1) / 12).toFixed(2) : '';
+      if (key === 'years') return p.end && k.s != null ? +((k.e - k.s + 1) / 12).toFixed(2) : '';
       return p[key] ?? '';
     })));
   }
@@ -570,15 +601,15 @@ function importCSV(text) {
   const norm = (h) => h.replace(/\s|\(.*?\)/g, '');
   const idx = {};
   rows[0].forEach((h, i) => { const c = CSV_COLS.find(([k, label]) => norm(label) === norm(h) || k === h.trim()); if (c) idx[c[0]] = i; });
-  if (idx.insurer == null || idx.premium == null || idx.start == null) { alert('첫 줄에 최소한 ‘보험사, 납입액, 납입시작’ 칸이 있어야 해요. ‘엑셀 입력 양식’을 받아서 써 보세요.'); return; }
+  if (idx.insurer == null || idx.premium == null) { alert('첫 줄에 최소한 ‘보험사, 납입액’ 칸이 있어야 해요. ‘엑셀 입력 양식’을 받아서 써 보세요.'); return; }
   let added = 0, skipped = 0;
   for (const r of rows.slice(1)) {
     const get = (k) => (idx[k] != null ? String(r[idx[k]] ?? '').trim() : '');
     const s = ym(get('start')), prem = digits(get('premium'));
-    if (s == null || !prem) { skipped++; continue; }
+    if (!prem || !get('insurer')) { skipped++; continue; }
     let e = ym(get('end'));
     const yrs = parseFloat(get('years'));
-    if (e == null && yrs > 0) e = s + Math.round(yrs * 12) - 1;
+    if (e == null && yrs > 0 && s != null) e = s + Math.round(yrs * 12) - 1;
     const whoName = get('who');
     let m = whoName ? db.members.find((x) => x.name === whoName) : db.members[0];
     if (!m) {
@@ -596,7 +627,7 @@ function importCSV(text) {
     added++;
   }
   save(); render(); if ($('#dlgSettings').open) renderMembers();
-  alert(`${added}건을 추가했어요.${skipped ? ` (납입액이나 납입시작이 없는 ${skipped}줄은 건너뜀)` : ''}`);
+  alert(`${added}건을 추가했어요.${skipped ? ` (보험사나 납입액이 없는 ${skipped}줄은 건너뜀)` : ''}`);
 }
 
 function importJSON(text) {
@@ -653,10 +684,315 @@ function sample() {
   };
 }
 
+/* ── 사진으로 등록 (Claude API) ──
+ * 사진을 Claude가 읽어 보험 목록(JSON)으로 돌려주면, 확인 화면에서 고친 뒤 등록한다.
+ * API 키는 이 기기에만 저장하고 백업 파일에는 넣지 않는다. */
+const API_KEY = 'insure.apiKey';
+const MODEL = 'claude-opus-5-5';
+const MAX_PHOTOS = 5;
+const getKey = () => { try { return localStorage.getItem(API_KEY) || ''; } catch { return ''; } };
+const setKey = (k) => { try { if (k) localStorage.setItem(API_KEY, k); else localStorage.removeItem(API_KEY); } catch {} };
+
+let Anthropic = null; // SDK는 처음 스캔할 때만 불러온다 (약 300KB)
+async function sdk() {
+  if (!Anthropic) Anthropic = (await import('./vendor/anthropic-sdk-1.1.0.mjs')).default;
+  return Anthropic;
+}
+
+const SCAN_SYSTEM = `너는 한국 가정의 보험 관리 앱에 넣을 데이터를 사진에서 뽑는 도우미야.
+사진은 보험증권, 보험사·토스·뱅크샐러드 같은 앱 화면 캡처, 손으로 적은 보험 표일 수 있어.
+사진에 보이는 서로 다른 보험 계약을 하나도 빠짐없이 policies 배열에 넣어. 보험이 없으면 빈 배열.
+
+규칙
+- 보이지 않는 값은 지어내지 말고 빈 문자열("") 또는 0으로 둬.
+- premium: 한 번 낼 때 금액(원, 정수). 월납이면 월 보험료. 고친 흔적이 있으면 가장 최근 금액을 쓰고 예전 금액은 memo에.
+- cycle: 월납 "M", 연납 "Y".
+- start / end: "YYYY-MM". 연도만 알면 "YYYY". end는 보험료를 마지막으로 내는 달(납입 만료)이야. 보장 만기와 헷갈리지 마.
+- years: "20년납"처럼 납입 기간이 보이면 그 연수.
+- 손으로 그린 표에서 선이 어느 연도 칸에서 끝나면 그 연도가 end야. 연도 위에 나이가 같이 적혀 있어도 end는 연도로.
+- renewable: 실손의료비처럼 갱신형이거나 납입 끝이 정해지지 않은 보험이면 true.
+- paidPct / remainAmount: 화면에 "34.4% 납부", "17,593,480원 남음"처럼 보이면 그 숫자 그대로.
+- cancelled: 줄을 그어 지웠거나 해지·실효로 적힌 보험. 해지 시점이 보이면 cancelMonth("YYYY-MM").
+- payStart / payYears / payAmt: 연금·만기금을 받는 정보. 예: "2036년부터 5년간 지급" → payStart "2036", payYears 5. 종신 지급이면 payYears 0.
+- insured: 피보험자(보장받는 사람)의 이름이나 관계가 보이면.
+- name: 목록에 보일 짧은 이름, 12자 이내. 예: "교보 변액연금", "현대 실손".
+- insurer: 보이는 회사 이름 그대로. 옛 이름(LIG, 동부 등)이면 memo에 지금 이름을 적어도 돼.
+- unsure: 글씨가 흐리거나 숫자를 확실히 못 읽었으면 true.
+- note: 사용자에게 알려 줄 점을 한두 문장으로.
+- 아이디, 비밀번호, 주민등록번호, 계좌·카드 번호 같은 민감한 정보는 어디에도 옮기지 마.`;
+
+const S = (type, extra = {}) => ({ type, ...extra });
+const SCAN_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['policies', 'note'],
+  properties: {
+    note: S('string'),
+    policies: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['insured', 'insurer', 'name', 'product', 'type', 'premium', 'cycle', 'start', 'end', 'years', 'renewable',
+          'paidPct', 'remainAmount', 'cover', 'payStart', 'payYears', 'payAmt', 'cancelled', 'cancelMonth', 'unsure', 'memo'],
+        properties: {
+          insured: S('string'), insurer: S('string'), name: S('string'), product: S('string'),
+          type: S('string', { enum: TYPES }), premium: S('integer'), cycle: S('string', { enum: ['M', 'Y'] }),
+          start: S('string'), end: S('string'), years: S('number'), renewable: S('boolean'),
+          paidPct: S('number'), remainAmount: S('integer'), cover: S('string'),
+          payStart: S('string'), payYears: S('integer'), payAmt: S('integer'),
+          cancelled: S('boolean'), cancelMonth: S('string'), unsure: S('boolean'), memo: S('string'),
+        },
+      },
+    },
+  },
+};
+
+const dlgS = $('#dlgScan');
+let scanRows = [], scanNote = '', scanAbort = null;
+function scanStep(name) { $$('#dlgScan [data-step]').forEach((el) => { el.hidden = el.dataset.step !== name; }); if (!dlgS.open) dlgS.showModal(); }
+
+function openScan() {
+  if (dlgP.open) dlgP.close();
+  if (!getKey()) { $('#s-key').value = ''; $('#s-key-err').textContent = ''; scanStep('key'); return; }
+  $('#scanFile').click();
+}
+
+function saveKey() {
+  const k = $('#s-key').value.trim();
+  if (!/^sk-ant-/.test(k)) { $('#s-key-err').textContent = 'sk-ant- 로 시작하는 키를 붙여넣어 주세요.'; return; }
+  setKey(k);
+  if ($('#dlgSettings').open) renderKeyState();
+  $('#scanFile').click(); // 사용자가 누른 버튼 안에서 바로 사진 고르기
+}
+
+/** 큰 폰 사진을 Claude가 읽는 최대 크기(긴 변 2576px, 3.75MP)로 줄여 JPEG로 */
+async function prepImage(file) {
+  let src;
+  try { src = await createImageBitmap(file); }
+  catch {
+    src = await new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => rej(new Error('사진을 열 수 없어요.')); img.src = URL.createObjectURL(file); });
+  }
+  const w = src.width, h = src.height;
+  const sc = Math.min(1, 2576 / Math.max(w, h), Math.sqrt(3.75e6 / (w * h)));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
+  cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+  const url = cv.toDataURL('image/jpeg', 0.88);
+  return { url, data: url.slice(url.indexOf(',') + 1) };
+}
+
+async function runScan(files) {
+  files = [...files].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name)).slice(0, MAX_PHOTOS);
+  if (!files.length) return;
+  scanStep('busy');
+  $('#s-thumbs').innerHTML = '';
+  $('#s-busy-msg').textContent = '사진 준비 중…';
+  const ac = new AbortController();
+  scanAbort = ac;
+  try {
+    const imgs = [];
+    for (const f of files) {
+      const im = await prepImage(f);
+      imgs.push(im);
+      $('#s-thumbs').insertAdjacentHTML('beforeend', `<img src="${im.url}" alt="">`);
+    }
+    if (ac.signal.aborted) return;
+    $('#s-busy-msg').textContent = 'AI가 사진을 읽는 중… 보통 20초~1분 걸려요.';
+    const A = await sdk();
+    const client = new A({ apiKey: getKey(), dangerouslyAllowBrowser: true, maxRetries: 1 });
+    const d = new Date();
+    const stream = client.beta.messages.stream({
+      model: MODEL,
+      max_tokens: 16000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default', // 드물게 안전 필터가 거절하면 다른 모델로 자동 재시도
+      output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCAN_SCHEMA } },
+      system: SCAN_SYSTEM,
+      messages: [{
+        role: 'user',
+        content: [
+          ...imgs.map((im) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: im.data } })),
+          { type: 'text', text: `오늘은 ${d.getFullYear()}년 ${d.getMonth() + 1}월이야. 이 사진${imgs.length > 1 ? '들' : ''}에서 보험을 모두 찾아 줘.` },
+        ],
+      }],
+    }, { signal: ac.signal });
+    const msg = await stream.finalMessage();
+    if (msg.stop_reason === 'refusal') throw new Error('이 사진은 읽을 수 없다는 답이 왔어요. 다른 사진으로 해 보세요.');
+    if (msg.stop_reason === 'max_tokens') throw new Error('사진 속 내용이 너무 많아요. 사진을 나눠서 올려 주세요.');
+    const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    let out;
+    try { out = JSON.parse(text); } catch { throw new Error('결과를 읽지 못했어요. 다시 해 보세요.'); }
+    scanNote = String(out.note || '');
+    scanRows = (Array.isArray(out.policies) ? out.policies : []).map(fromScan);
+    renderScanRows();
+    scanStep('review');
+  } catch (err) {
+    if (ac.signal.aborted) return;
+    showScanError(err);
+  } finally {
+    if (scanAbort === ac) scanAbort = null;
+  }
+}
+
+function showScanError(err) {
+  const A = Anthropic;
+  let msg = (err && err.message) || '알 수 없는 오류가 났어요.', key = false;
+  if (A) {
+    if (err instanceof A.AuthenticationError) { msg = 'API 키가 맞지 않아요. 키를 다시 넣어 주세요.'; key = true; }
+    else if (err instanceof A.PermissionDeniedError) { msg = '이 API 키로는 쓸 수 없어요. 콘솔에서 키 권한을 확인해 주세요.'; key = true; }
+    else if (err instanceof A.RateLimitError) msg = '요청이 너무 많아요. 1분쯤 뒤에 다시 해 보세요.';
+    else if (err instanceof A.BadRequestError) msg = `요청이 거절됐어요. 크레딧 잔액이 부족하면 콘솔에서 충전해야 해요.\n(${err.message})`;
+    else if (err instanceof A.APIConnectionError) msg = '인터넷 연결을 확인하고 다시 해 보세요.';
+    else if (err instanceof A.APIError) msg = `AI 서버 오류(${err.status ?? '?'})예요. 잠시 뒤 다시 해 보세요.`;
+  }
+  $('#s-error-msg').textContent = msg;
+  $('#s-error-key').hidden = !key;
+  scanStep('error');
+}
+
+const yearOnly = (v) => /^\s*\d{4}\s*$/.test(v || '');
+const normName = (s) => String(s || '').replace(/\s|(생명|화재|손해보험|손보|라이프|보험)$/g, '');
+
+/** AI가 읽은 한 줄 → 확인 화면용 데이터 (빈 값 채우기 + 확인할 점 표시) */
+function fromScan(r) {
+  const per = r.cycle === 'Y' ? 12 : 1;
+  const premium = Math.max(0, Math.round(+r.premium || 0));
+  let open = !!r.renewable;
+  let s = ym(r.start);
+  let e = open ? null : yearOnly(r.end) ? +r.end.trim() * 12 + 11 : ym(r.end);
+  const warn = [];
+  if (!open) {
+    if (e == null && s != null && r.years > 0) e = s + Math.round(r.years * 12) - 1;
+    if (r.remainAmount > 0 && premium > 0) {
+      const left = Math.round(r.remainAmount / premium);
+      if (e == null) e = NOW + left * per;
+      if (s == null && r.paidPct > 0 && r.paidPct < 100) {
+        const total = totalFrom(left, r.paidPct, per);
+        s = NOW - (total - left - 1) * per;
+      }
+    }
+    if (e != null && e - NOW > 80 * 12) { e = null; open = true; warn.push('끝이 너무 멀어서 갱신형으로 넣었어요'); }
+  }
+  if (yearOnly(r.start) || (!open && yearOnly(r.end))) warn.push('월은 몰라서 추정했어요');
+  if (r.unsure) warn.push('글씨가 흐려서 금액·연도를 꼭 확인해 주세요');
+
+  const insured = String(r.insured || '').trim();
+  const hit = insured && db.members.find((m) => m.name === insured || insured.includes(m.name) || m.name.includes(insured));
+  if (insured && !hit) warn.push(`사진 속 피보험자: ${insured}`);
+  const dup = db.policies.some((p) => p.premium === premium && normName(p.insurer) === normName(r.insurer));
+  if (dup) warn.push('이미 등록된 보험 같아요');
+  if (r.cancelled) warn.push('해지한 보험으로 보여요. 등록하면 ‘해지한 보험’에 들어가요');
+
+  return {
+    on: !dup && !r.cancelled,
+    who: hit ? hit.id : ui.who !== 'all' ? ui.who : db.members[0].id,
+    insurer: String(r.insurer || '').trim(), name: String(r.name || '').trim().slice(0, 20), product: String(r.product || '').trim(),
+    type: TYPES.includes(r.type) ? r.type : '기타', premium, cycle: r.cycle === 'Y' ? 'Y' : 'M',
+    start: ymStr(s), end: ymStr(e), open,
+    cover: String(r.cover || ''), payStart: ymStr(yearOnly(r.payStart) ? +r.payStart.trim() * 12 : ym(r.payStart)),
+    payYears: +r.payYears || null, payAmt: +r.payAmt || null,
+    cancel: r.cancelled ? (ymStr(ym(r.cancelMonth)) || ymStr(NOW)) : '',
+    memo: String(r.memo || '').trim(), warn, err: '',
+  };
+}
+
+function renderScanRows() {
+  const n = scanRows.length;
+  $('#s-title').textContent = n ? `찾은 보험 ${n}건` : '보험을 찾지 못했어요';
+  $('#s-note').textContent = scanNote;
+  $('#s-err').textContent = '';
+  $('#s-rows').innerHTML = scanRows.map((r, i) => `
+    <div class="srow${r.on ? '' : ' off'}${r.err ? ' bad' : ''}" data-i="${i}">
+      <div class="srow-top">
+        <label class="srow-on"><input type="checkbox" data-f="on"${r.on ? ' checked' : ''}><b>${esc(r.name || r.insurer || '이름 없음')}</b></label>
+        <select data-f="who" aria-label="누구 보험">${db.members.map((m) => `<option value="${m.id}"${m.id === r.who ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>
+      </div>
+      <div class="grid2">
+        <label>보험사<input data-f="insurer" value="${esc(r.insurer)}" list="insurerList"></label>
+        <label>이름<input data-f="name" value="${esc(r.name)}" maxlength="20"></label>
+      </div>
+      <div class="grid2">
+        <label>${r.cycle === 'Y' ? '연' : '월'} 납입액<input class="money" data-f="premium" inputmode="numeric" value="${r.premium ? won(r.premium) : ''}"></label>
+        <label>종류<select data-f="type">${TYPES.map((t) => `<option${t === r.type ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+      </div>
+      <div class="grid2">
+        <label>납입 시작 <small>모르면 비움</small><input type="month" data-f="start" value="${r.start}"></label>
+        <label>납입 끝<input type="month" data-f="end" value="${r.end}"${r.open ? ' disabled' : ''}></label>
+      </div>
+      <label class="check sm"><input type="checkbox" data-f="open"${r.open ? ' checked' : ''}><span>갱신형 · 끝 없음</span></label>
+      ${r.product ? `<p class="srow-sub">${esc(r.product)}</p>` : ''}
+      ${r.memo ? `<p class="srow-sub">메모: ${esc(r.memo)}</p>` : ''}
+      ${r.warn.map((w) => `<p class="srow-warn">⚠ ${esc(w)}</p>`).join('')}
+      ${r.err ? `<p class="err">${esc(r.err)}</p>` : ''}
+    </div>`).join('');
+  updateScanCount();
+}
+function updateScanCount() {
+  const n = scanRows.filter((r) => r.on).length;
+  const b = $('#s-save');
+  b.textContent = n ? `${n}건 등록` : '등록할 보험 없음';
+  b.disabled = !n;
+}
+
+function saveScan() {
+  let bad = 0;
+  for (const r of scanRows) {
+    r.err = r.on ? policyError(r, r.open) : '';
+    if (r.err) bad++;
+  }
+  if (bad) { renderScanRows(); $('#s-err').textContent = `${bad}건에 빠진 값이 있어요. 빨간 글씨를 확인해 주세요.`; return; }
+  const add = scanRows.filter((r) => r.on).map((r) => ({
+    id: uid(), who: r.who, insurer: r.insurer, product: r.product, type: r.type,
+    name: r.name || `${r.insurer.replace(/(생명|화재|손해보험|라이프)$/, '')} ${r.type}`.trim(),
+    premium: r.premium, cycle: r.cycle, start: r.start, end: r.open ? '' : r.end,
+    cover: r.cover, payday: null, payStart: r.payStart, payYears: r.payYears, payAmt: r.payAmt,
+    cancel: r.cancel, memo: r.memo,
+  }));
+  db.policies.push(...add);
+  save(); dlgS.close(); render(); persist();
+  toast(`${add.length}건을 등록했어요. 틀린 곳은 눌러서 고치세요.`);
+}
+
+$('#s-rows').addEventListener('input', (e) => {
+  const el = e.target, row = el.closest('[data-i]');
+  if (!row || !el.dataset.f) return;
+  const r = scanRows[+row.dataset.i], f = el.dataset.f;
+  if (el.classList.contains('money')) { const n = digits(el.value); el.value = n ? won(n) : ''; r[f] = n; return; }
+  if (el.type === 'checkbox') {
+    r[f] = el.checked;
+    if (f === 'on') { row.classList.toggle('off', !el.checked); updateScanCount(); }
+    if (f === 'open') $('[data-f=end]', row).disabled = el.checked;
+    return;
+  }
+  r[f] = f === 'start' || f === 'end' ? ymStr(ym(el.value)) : el.value.trim();
+  if (f === 'name' || f === 'insurer') $('.srow-on b', row).textContent = r.name || r.insurer || '이름 없음';
+});
+$('#s-rows').addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') e.target.dispatchEvent(new Event('input', { bubbles: true })); });
+$('#scanFile').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; runScan(fs); });
+dlgS.addEventListener('close', () => { if (scanAbort) scanAbort.abort(); });
+
+function renderKeyState() {
+  const k = getKey();
+  $('#keyState').textContent = k ? `연결됨 · ${k.slice(0, 10)}…${k.slice(-4)}` : '아직 API 키가 없어요';
+  $('#btnKeyDel').hidden = !k;
+}
+
+let toastT;
+function toast(text) {
+  const t = $('#toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3500);
+}
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
-  settings: () => { renderMembers(); $('#dlgSettings').showModal(); },
+  settings: () => { renderMembers(); renderKeyState(); $('#dlgSettings').showModal(); },
+  scan: openScan,
+  saveKey,
+  saveScan,
+  scanMore: () => $('#scanFile').click(),
+  cancelScan: () => { if (scanAbort) scanAbort.abort(); dlgS.close(); },
+  editKey: () => { $('#s-key').value = ''; $('#s-key-err').textContent = ''; scanStep('key'); },
+  delKey: () => { if (confirm('이 폰에 저장된 API 키를 지울까요?')) { setKey(''); renderKeyState(); } },
   addMember: () => openMember(null),
   deleteMember,
   deletePolicy: () => {

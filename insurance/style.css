@@ -253,3 +253,34 @@ ol.note li{margin-bottom:4px}
 .mrow b{font-size:15px}
 .mrow small{font-size:12px;color:var(--mute)}
 .mrow span{font-size:13px;color:var(--sub)}
+
+/* ── 사진으로 등록 ── */
+.scanbtn{width:100%;display:flex;flex-direction:column;align-items:center;gap:3px;margin-bottom:18px;
+  background:var(--accent);color:var(--accent-fg);padding:14px}
+.scanbtn small{font-size:12px;font-weight:400;opacity:.85}
+.in .howto{margin:0 0 16px}
+.keystate{font-size:13.5px;color:var(--sub);margin:0 0 8px}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:6px 0 16px}
+.thumbs img{width:64px;height:84px;object-fit:cover;border-radius:10px;background:var(--line)}
+.spin{width:34px;height:34px;margin:6px auto 12px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:3s}}
+.center{text-align:center}
+.pre{white-space:pre-line}
+.srow{background:var(--bg);border-radius:16px;padding:12px 12px 4px;margin-bottom:10px;border:2px solid transparent}
+.srow.off{opacity:.55}
+.srow.bad{border-color:var(--danger)}
+.srow-top{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.srow-on{display:flex;align-items:center;gap:10px;flex:1;min-width:0;margin:0;cursor:pointer}
+.srow-on input{width:22px;height:22px;min-height:0;margin:0;padding:0;flex:none;accent-color:var(--accent)}
+.srow-on b{font-size:15.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srow-top select{width:auto;min-height:38px;padding:6px 10px;font-size:14px;background:var(--card)}
+.srow input,.srow select{background:var(--card)}
+.srow label{margin-bottom:10px}
+.check.sm{padding-top:0;margin:-2px 0 8px}
+.check.sm input{width:20px;height:20px}
+.srow-sub{font-size:12px;color:var(--mute);margin:0 0 6px;word-break:break-all}
+.srow-warn{font-size:12.5px;color:var(--sub);margin:0 0 6px}
+.actions.sticky{position:sticky;bottom:calc(-18px - env(safe-area-inset-bottom));background:var(--card);padding:10px 0 calc(10px + env(safe-area-inset-bottom));margin-bottom:calc(-18px - env(safe-area-inset-bottom))}
+#toast{position:fixed;z-index:20;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));
+  max-width:min(92vw,480px);background:var(--fg);color:var(--card);padding:12px 16px;border-radius:14px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
