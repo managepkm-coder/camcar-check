@@ -41,6 +41,14 @@ const ymStr = (i) => (i == null ? '' : `${Math.floor(i / 12)}-${pad((i % 12) + 1
 const ymDot = (i) => `${Math.floor(i / 12)}.${pad((i % 12) + 1)}`;
 const nowIdx = () => { const d = new Date(); return d.getFullYear() * 12 + d.getMonth(); };
 const dur = (m) => [Math.floor(m / 12) && `${Math.floor(m / 12)}년`, m % 12 && `${m % 12}개월`].filter(Boolean).join(' ') || '0개월';
+/** 좁은 칸용 짧은 금액: 17,593,480 → 1,759만 / 1.8억 */
+const short = (n) => {
+  n = Math.round(n);
+  if (n >= 1e8) return `${(n / 1e8).toFixed(n >= 1e9 ? 0 : 1).replace(/\.0$/, '')}억`;
+  return n >= 1e4 ? `${won(Math.round(n / 1e4))}만` : won(n);
+};
+/** 넓은 화면은 정확한 금액, 좁은 화면은 짧은 금액 (CSS가 하나만 보여 준다) */
+const money2 = (n) => `<span class="w">${won(n)}</span><span class="n">${short(n)}</span>`;
 const manwon = (n) => {
   n = Math.round(n);
   if (n < 10000) return `${won(n)}원`;
@@ -149,6 +157,7 @@ function render() {
   $('#summary').innerHTML = empty ? '' : summaryHTML(list);
   $('#seg').hidden = empty;
   $$('#seg button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === ui.view)));
+  $('#content').className = !empty && ui.view === 'list' ? 'cards' : '';
   $('#content').innerHTML = empty ? emptyHTML()
     : !live.length ? '<p class="none">등록된 보험이 없어요.</p>'
     : ui.view === 'list' ? live.slice().sort(byStatusThenPremium).map(cardHTML).join('')
@@ -210,7 +219,7 @@ function summaryHTML(list) {
     ${family}
     <div class="stats">
       <div><small>지금까지 낸 돈</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
-      <div><small>앞으로 낼 돈</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
+      <div><small>남은 납부액</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
     </div>
   </div>`;
 }
@@ -235,8 +244,9 @@ function timelineHTML(list) {
   const pc = (v) => `${v.toFixed(2)}%`;
 
   // 눈금 간격: 연도 글자가 겹치지 않을 만큼 (화면 폭으로 그래프 폭을 어림)
-  const w = Math.min(window.innerWidth, 560);
-  const plotW = w - 56 - (w <= 370 ? 150 : w >= 500 ? 212 : 174);
+  const w = Math.min(window.innerWidth, 1200);
+  const cols = w <= 370 ? 150 : w >= 700 ? 298 : w >= 500 ? 212 : 174; // style.css 의 --nw + --aw + 간격
+  const plotW = w - (w >= 700 ? 48 : 32) - 24 - cols;
   const step = [1, 2, 5, 10, 20].find((st) => (plotW * st * 12) / span >= 34) || 20;
   const ticks = [];
   for (let y = Math.ceil(d0 / 12 / step) * step; y * 12 < d1; y += step) { const x = X(y * 12); if (x > 4 && x < 96) ticks.push(y); }
@@ -246,12 +256,14 @@ function timelineHTML(list) {
   rows.sort((a, b) => db.members.indexOf(a.m) - db.members.indexOf(b.m) || (a.k.e ?? Infinity) - (b.k.e ?? Infinity) || b.k.monthly - a.k.monthly);
   const multi = new Set(rows.map((r) => r.m.id)).size > 1;
 
+  const remainOf = (list) => list.reduce((a, r) => a + (r.k.status !== 'done' && r.k.remainAmt != null ? r.k.remainAmt : 0), 0);
   let body = '', last = null, total = 0;
   for (const { p, k, m } of rows) {
     if (multi && m !== last) {
       last = m;
-      const sum = rows.filter((r) => r.m === m && r.k.status === 'paying').reduce((a, r) => a + r.k.monthly, 0);
-      body += `<div class="tl-group"><i style="background:var(--m${m.slot})"></i>${esc(m.name)}<span>${won(sum)}</span></div>`;
+      const mine = rows.filter((r) => r.m === m);
+      const sum = mine.filter((r) => r.k.status === 'paying').reduce((a, r) => a + r.k.monthly, 0);
+      body += `<div class="tl-group"><i style="background:var(--m${m.slot})"></i>${esc(m.name)}<span>월 ${won(sum)} · 남은 ${money2(remainOf(mine))}</span></div>`;
     }
     if (k.status === 'paying') total += k.monthly;
     const open = k.e == null;
@@ -270,7 +282,8 @@ function timelineHTML(list) {
     const age = ageAt(focus, open ? NOW : k.e);
     const lbl = open ? '갱신형 · 계속' : k.status === 'done' ? `${Math.floor(k.e / 12)} 완납` : `${Math.floor(k.e / 12)}${age != null ? ` · ${age}세` : ''}`;
     const lx = open ? x0 : x1;
-    const amt = k.status === 'done' ? '완납' : won(k.monthly);
+    const amt = k.status === 'done' ? '<small>완납</small>'
+      : `<b>${won(k.monthly)}</b><small>${k.remainAmt == null ? '갱신형' : money2(k.remainAmt)}</small>`;
     body += `<button class="tl-row ${k.status}" data-id="${p.id}" style="--c:var(--m${m.slot})" title="${esc(tip)}">
       <span class="tl-name"><b>${esc(p.name)}</b><small>${esc(p.insurer)}${p.cycle === 'Y' ? ' · 연납' : ''}</small></span>
       <span class="tl-track">${marks}<em class="lbl${lx > 62 ? ' r' : ''}" style="left:${pc(lx)}">${lbl}</em></span>
@@ -283,9 +296,9 @@ function timelineHTML(list) {
     <div class="tl-axis"><span class="tl-h">보험</span><span class="tl-track">${ticks.map((y) => {
       const a = ageAt(focus, y * 12);
       return `<em style="left:${pc(X(y * 12))}">${y}${a != null ? `<small>${a}세</small>` : ''}</em>`;
-    }).join('')}</span><span class="tl-h r">월납입액</span></div>
+    }).join('')}</span><span class="tl-h r">월납입액<small>남은 납부액</small></span></div>
     ${body}
-    <div class="tl-foot"><span>합계</span><span class="tl-track"><em style="left:${pc(X(today))}">오늘</em></span><span class="tl-amt">${won(total)}</span></div>
+    <div class="tl-foot"><span>합계</span><span class="tl-track"><em style="left:${pc(X(today))}">오늘</em></span><span class="tl-amt"><b>${won(total)}</b><small>${money2(remainOf(rows))}</small></span></div>
   </div>
   <p class="tl-legend"><span><i class="lg-bar"></i>내는 기간</span><span><i class="lg-recv"></i>받는 기간</span><span><i class="lg-now"></i>오늘</span>${focus.birth ? `<span>나이: ${esc(focus.name)} 기준</span>` : ''}${hidden ? `<span>예전에 다 낸 ${hidden}건은 ‘보험별 상세’에</span>` : ''}</p>
   </div>`;
