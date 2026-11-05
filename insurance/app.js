@@ -73,7 +73,7 @@ function normalize(d) {
     used.add(m.slot);
   }
   const ids = new Set(members.map((m) => m.id));
-  const policies = (Array.isArray(d.policies) ? d.policies : []).filter((p) => p && ym(p.start) != null).map((p) => ({
+  const policies = (Array.isArray(d.policies) ? d.policies : []).filter((p) => p && typeof p === 'object').map((p) => ({
     id: String(p.id || uid()),
     who: ids.has(p.who) ? p.who : members[0].id,
     insurer: String(p.insurer || ''), name: String(p.name || p.insurer || '보험'), product: String(p.product || ''),
@@ -104,23 +104,31 @@ function compute(p) {
 
   let status = 'paying';
   if (c != null && c <= NOW) status = 'cancelled';
-  else if (NOW < s) status = 'before';
+  else if (s != null && NOW < s) status = 'before';
   else if (e != null && NOW > e) status = 'done';
 
-  const totalN = e != null ? Math.max(0, Math.floor((e - s) / per) + 1) : Infinity;
-  const paidN = Math.max(0, Math.min(totalN, Math.floor((Math.min(NOW, e ?? NOW) - s) / per) + 1));
-  const remainN = status === 'cancelled' ? 0 : totalN - paidN;
+  let totalN = Infinity, paidN = null, remainN;
+  if (s != null) {
+    totalN = e != null ? Math.max(0, Math.floor((e - s) / per) + 1) : Infinity;
+    paidN = Math.max(0, Math.min(totalN, Math.floor((Math.min(NOW, e ?? NOW) - s) / per) + 1));
+    remainN = totalN - paidN;
+  } else {
+    // 시작 월을 모르면 낸 횟수는 모르고, 남은 횟수만 끝 월로 계산한다
+    remainN = e != null ? Math.max(0, Math.floor((e - NOW) / per)) : Infinity;
+  }
+  if (status === 'cancelled') remainN = 0;
   return {
     s, e, c, per, status, totalN, paidN, remainN,
     monthly: p.premium / per, // 연납은 월로 환산
-    paidAmt: paidN * p.premium,
+    paidAmt: (paidN ?? 0) * p.premium,
     remainAmt: Number.isFinite(remainN) ? remainN * p.premium : null,
-    pct: Number.isFinite(totalN) && totalN > 0 ? paidN / totalN : null,
+    pct: paidN != null && Number.isFinite(totalN) && totalN > 0 ? paidN / totalN : null,
     left: e != null ? Math.max(0, e - NOW) : null, // 이번 달 다음부터 남은 개월
   };
 }
 const payLabel = (k) => {
   if (k.e == null) return '갱신형';
+  if (k.s == null) return '';
   const n = k.e - k.s + 1;
   return n % 12 === 0 ? `${n / 12}년납` : `${dur(n)}납`;
 };
@@ -170,10 +178,11 @@ function renderChips() {
 }
 
 function summaryHTML(list) {
-  let monthly = 0, paid = 0, remain = 0, nPay = 0, nDone = 0, nOpen = 0;
+  let monthly = 0, paid = 0, remain = 0, nPay = 0, nDone = 0, nOpen = 0, nNoStart = 0;
   for (const p of list) {
     const k = calc(p);
     paid += k.paidAmt;
+    if (k.paidN == null) nNoStart++;
     if (k.status === 'paying') { monthly += k.monthly; nPay++; }
     if (k.status === 'done') nDone++;
     if (k.status === 'paying' || k.status === 'before') { if (k.remainAmt == null) nOpen++; else remain += k.remainAmt; }
@@ -200,7 +209,7 @@ function summaryHTML(list) {
     <div class="sum-sub">1년이면 ${manwon(monthly * 12)} · 내는 중 ${nPay}건${nDone ? ` · 완납 ${nDone}건` : ''}</div>
     ${family}
     <div class="stats">
-      <div><small>지금까지 낸 돈</small><b>${manwon(paid)}</b></div>
+      <div><small>지금까지 낸 돈</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
       <div><small>앞으로 낼 돈</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
     </div>
   </div>`;
@@ -210,7 +219,8 @@ function summaryHTML(list) {
 function timelineHTML(list) {
   let rows = list.map((p) => ({ p, k: calc(p), m: member(p.who) }));
   // 지난 일은 최근 4년만 보여 주고, 화면 폭은 앞으로 남은 기간에 쓴다
-  let d0 = Math.max(Math.min(...rows.map((r) => r.k.s)), NOW - 48);
+  const starts = rows.map((r) => r.k.s).filter((s) => s != null);
+  let d0 = Math.max(starts.length ? Math.min(...starts) : NOW - 48, NOW - 48);
   let d1 = NOW + 12;
   for (const { k } of rows) if (k.e != null) d1 = Math.max(d1, k.e + 1);
   d1 += 24;
@@ -245,13 +255,13 @@ function timelineHTML(list) {
     }
     if (k.status === 'paying') total += k.monthly;
     const open = k.e == null;
-    const x0 = X(k.s), x1 = open ? 100 : X(k.e + 1);
-    const cut = k.s < d0; // 화면 왼쪽보다 먼저 시작
+    const x0 = k.s != null ? X(k.s) : 0, x1 = open ? 100 : X(k.e + 1);
+    const cut = k.s == null || k.s < d0; // 화면 왼쪽보다 먼저 시작했거나 시작 월을 모름
     let marks = `<i class="bar${open ? ' open' : ''}${cut ? ' cut' : ''}${k.status === 'done' ? ' done' : ''}" style="left:${pc(x0)};width:${pc(Math.max(x1 - x0, 0.6))}"></i>`;
     if (!open) marks += `<i class="dot${k.status === 'done' ? ' done' : ''}" style="left:${pc(x1)}"></i>`;
 
     const ps = ym(p.payStart);
-    let tip = `${p.name} · ${ymDot(k.s)} ~ ${open ? '계속' : ymDot(k.e)} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원`;
+    let tip = `${p.name} · ${k.s != null ? ymDot(k.s) : '시작 모름'} ~ ${open ? '계속' : ymDot(k.e)} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원`;
     if (ps != null) {
       const pe = p.payYears ? ps + p.payYears * 12 : d1;
       marks += `<i class="recv${pe >= d1 ? ' open' : ''}" style="left:${pc(X(ps))};width:${pc(Math.max(X(pe) - X(ps), 0.6))}"></i>`;
@@ -284,15 +294,22 @@ function timelineHTML(list) {
 function cardHTML(p) {
   const k = calc(p), m = member(p.who);
   const ageEnd = k.e != null ? ageAt(m, k.e) : null;
-  const period = `${ymDot(k.s)} ~ ${k.e != null ? ymDot(k.e) + (ageEnd != null ? `(${ageEnd}세)` : '') : '계속'} · ${payLabel(k)}`;
+  const pl = payLabel(k);
+  const period = `${k.s != null ? ymDot(k.s) : '시작 ?'} ~ ${k.e != null ? ymDot(k.e) + (ageEnd != null ? `(${ageEnd}세)` : '') : '계속'}${pl ? ` · ${pl}` : ''}`;
   const when = k.status === 'paying' ? (k.left != null ? (k.left ? `완납까지 ${dur(k.left)}` : '이번 달이 마지막') : '')
     : k.status === 'before' ? `${ymDot(k.s)} 시작` : '';
 
   let meter = '', foot;
   if (k.status === 'cancelled') {
-    foot = `<span>해지 ${ymDot(k.c)}</span><span>${won(k.paidAmt)}원 냄</span>`;
+    foot = `<span>해지 ${ymDot(k.c)}</span><span>${k.paidN != null ? `${won(k.paidAmt)}원 냄` : ''}</span>`;
   } else if (k.e == null) {
-    foot = `<span>계속 납입 · ${k.paidN}회째</span><span>지금까지 ${won(k.paidAmt)}원</span>`;
+    foot = k.paidN != null
+      ? `<span>계속 납입 · ${k.paidN}회째</span><span>지금까지 ${won(k.paidAmt)}원</span>`
+      : '<span>계속 납입 · 시작 월 모름</span><span></span>';
+  } else if (k.pct == null) {
+    foot = k.status === 'done'
+      ? '<span class="ok">✓ 납입완료</span><span></span>'
+      : `<span>시작 월 모름 · 남은 ${k.remainN}회</span><span>${won(k.remainAmt)}원 남음</span>`;
   } else {
     const pct = k.pct * 100;
     meter = `<div class="meter${k.status === 'done' ? ' done' : ''}"><i style="width:${pct.toFixed(1)}%"></i></div>`;
@@ -367,8 +384,9 @@ function payoutsHTML(list) {
 function emptyHTML() {
   return `<div class="card empty">
     <h2>보험을 추가해 보세요</h2>
-    <p>월 납입액과 납입기간만 넣으면 매달 얼마가 나가는지, 언제 다 내는지 한눈에 보여 드려요.</p>
-    <button class="btn primary wide" data-act="add">＋ 첫 보험 추가</button>
+    <p>월 납입액과 납입기간만 넣으면 매달 얼마가 나가는지, 언제 다 내는지 한눈에 보여 드려요. 보험 앱 캡처나 보험증권 사진을 올리면 글자를 읽어서 채워 줘요.</p>
+    <button class="btn primary wide" data-act="scan">📷 사진으로 등록</button>
+    <button class="btn wide" data-act="add">＋ 직접 입력</button>
     <button class="btn wide" data-act="sample">예시 데이터로 둘러보기</button>
     <div class="howto"><b>가입한 보험이 기억 안 나면?</b>
       <p><a href="https://www.credit4u.or.kr" target="_blank" rel="noopener">내보험다보여(신용정보원) ↗</a>에서 본인 명의 보험을 한 번에 조회할 수 있어요.</p></div>
@@ -401,6 +419,7 @@ function openPolicy(id) {
   $('#p-helper').open = false;
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
+  $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
   fromEnd(); syncOpen(); premiumHint();
   dlgP.showModal();
@@ -424,6 +443,14 @@ function premiumHint() {
   $('#p-premium-hint').textContent = n >= 10000 ? manwon(n) : '';
 }
 
+/** 납부율과 남은 횟수 → 전체 횟수. 계약은 보통 1년 단위라 월납에서 ±1회 차이는 맞춰 준다 (61회 → 60회) */
+function totalFrom(left, pct, per) {
+  let total = Math.round(left / (1 - pct / 100));
+  const snap = Math.round(total / 12) * 12;
+  if (per === 1 && snap >= 12 && Math.abs(snap - total) <= 1) total = snap;
+  return Math.max(total, left);
+}
+
 /* 보험 앱의 "34.4% 납부 · 17,593,480원 남음" → 납입 시작/끝 */
 function calcRemain() {
   const prem = digits($('#p-premium').value), remain = digits($('#h-remain').value);
@@ -437,7 +464,7 @@ function calcRemain() {
   $('#p-end').value = ymStr(end);
   $('#p-open').checked = false; syncOpen();
   if (pct > 0 && pct < 100) {
-    const total = Math.round(left / (1 - pct / 100));
+    const total = totalFrom(left, pct, per);
     const paid = total - left;
     const start = NOW - (paid - 1) * per;
     $('#p-start').value = ymStr(start);
@@ -446,6 +473,15 @@ function calcRemain() {
     out.textContent = `→ 납입 끝 ${ymDot(end)} (남은 ${left}회). 납입 시작 월은 직접 넣어 주세요.`;
   }
   fromEnd();
+}
+
+/** 저장 전에 빠진 값 확인. 시작 월은 몰라도 되지만, 끝 월(또는 갱신형)은 있어야 한다 */
+function policyError(p, open) {
+  return !p.insurer ? '보험사를 넣어 주세요.'
+    : !p.premium ? '납입액을 넣어 주세요.'
+    : !open && !p.end ? '납입 끝 월(또는 시작 월 + 기간)을 넣거나, 갱신형이면 체크해 주세요.'
+    : p.start && p.end && ym(p.end) < ym(p.start) ? '납입 끝이 시작보다 빨라요.'
+    : '';
 }
 
 $('#fPolicy').addEventListener('submit', (e) => {
@@ -463,12 +499,7 @@ $('#fPolicy').addEventListener('submit', (e) => {
     cancel: ymStr(ym(v('cancel'))), memo: v('memo'),
   };
   if (!p.name && p.insurer) p.name = `${p.insurer.replace(/(생명|화재|손해보험|라이프)$/, '')} ${p.type}`.trim();
-  const err = !p.insurer ? '보험사를 넣어 주세요.'
-    : !p.premium ? '납입액을 넣어 주세요.'
-    : !p.start ? '납입 시작 월을 넣어 주세요.'
-    : !open && !p.end ? '납입 기간(년)이나 납입 끝 월을 넣거나, 갱신형이면 체크해 주세요.'
-    : p.end && ym(p.end) < ym(p.start) ? '납입 끝이 시작보다 빨라요.'
-    : '';
+  const err = policyError(p, open);
   if (err) { $('#p-err').textContent = err; return; }
   if (editing) Object.assign(editing, p); else db.policies.push(p);
   save(); dlgP.close(); render(); persist();
@@ -541,7 +572,7 @@ function toCSV(policies) {
     lines.push(csvLine(CSV_COLS.map(([key]) => {
       if (key === 'who') return member(p.who).name;
       if (key === 'cycle') return p.cycle === 'Y' ? '연납' : '월납';
-      if (key === 'years') return p.end ? +((k.e - k.s + 1) / 12).toFixed(2) : '';
+      if (key === 'years') return p.end && k.s != null ? +((k.e - k.s + 1) / 12).toFixed(2) : '';
       return p[key] ?? '';
     })));
   }
@@ -564,21 +595,28 @@ function parseCSV(text) {
   return rows.filter((r) => r.some((x) => x.trim() !== ''));
 }
 
-function importCSV(text) {
-  const rows = parseCSV(text);
-  if (rows.length < 2) { alert('엑셀 파일에 내용이 없어요.'); return; }
+/** 엑셀 양식 CSV → [{who, insurer, ...}] (첫 줄에 보험사·납입액 칸이 없으면 null) */
+function csvRecords(text) {
+  const rows = parseCSV(String(text).trim());
+  if (rows.length < 2) return null;
   const norm = (h) => h.replace(/\s|\(.*?\)/g, '');
   const idx = {};
   rows[0].forEach((h, i) => { const c = CSV_COLS.find(([k, label]) => norm(label) === norm(h) || k === h.trim()); if (c) idx[c[0]] = i; });
-  if (idx.insurer == null || idx.premium == null || idx.start == null) { alert('첫 줄에 최소한 ‘보험사, 납입액, 납입시작’ 칸이 있어야 해요. ‘엑셀 입력 양식’을 받아서 써 보세요.'); return; }
+  if (idx.insurer == null || idx.premium == null) return null;
+  return rows.slice(1).map((r) => Object.fromEntries(Object.entries(idx).map(([k, i]) => [k, String(r[i] ?? '').trim()])));
+}
+
+function importCSV(text) {
+  const recs = csvRecords(text);
+  if (!recs) { alert('첫 줄에 최소한 ‘보험사, 납입액’ 칸이 있어야 해요. ‘엑셀 입력 양식’을 받아서 써 보세요.'); return; }
   let added = 0, skipped = 0;
-  for (const r of rows.slice(1)) {
-    const get = (k) => (idx[k] != null ? String(r[idx[k]] ?? '').trim() : '');
+  for (const o of recs) {
+    const get = (k) => o[k] || '';
     const s = ym(get('start')), prem = digits(get('premium'));
-    if (s == null || !prem) { skipped++; continue; }
+    if (!prem || !get('insurer')) { skipped++; continue; }
     let e = ym(get('end'));
     const yrs = parseFloat(get('years'));
-    if (e == null && yrs > 0) e = s + Math.round(yrs * 12) - 1;
+    if (e == null && yrs > 0 && s != null) e = s + Math.round(yrs * 12) - 1;
     const whoName = get('who');
     let m = whoName ? db.members.find((x) => x.name === whoName) : db.members[0];
     if (!m) {
@@ -596,7 +634,7 @@ function importCSV(text) {
     added++;
   }
   save(); render(); if ($('#dlgSettings').open) renderMembers();
-  alert(`${added}건을 추가했어요.${skipped ? ` (납입액이나 납입시작이 없는 ${skipped}줄은 건너뜀)` : ''}`);
+  alert(`${added}건을 추가했어요.${skipped ? ` (보험사나 납입액이 없는 ${skipped}줄은 건너뜀)` : ''}`);
 }
 
 function importJSON(text) {
@@ -653,10 +691,395 @@ function sample() {
   };
 }
 
+/* ── 사진으로 등록 (무료 · 폰 안에서 글자 인식) ──
+ * 인쇄된 글자(보험 앱 캡처, 보험증권)는 폰 안에서 OCR(tesseract.js)로 읽는다. 사진은 밖으로 나가지 않는다.
+ * 손글씨는 OCR이 못 읽으므로 '글자 붙여넣기'(갤러리 텍스트 추출 · Google 렌즈 · Claude 앱이 만든 표)를 쓴다.
+ * 어느 쪽이든 확인 화면에서 고친 뒤 등록한다. */
+const OCR_JS = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
+const MAX_PHOTOS = 5;
+
+const dlgS = $('#dlgScan');
+let scanRows = [], scanNote = '', scanText = '', scanRun = null;
+function scanStep(name) { $$('#dlgScan [data-step]').forEach((el) => { el.hidden = el.dataset.step !== name; }); if (!dlgS.open) dlgS.showModal(); }
+function openScan() { if (dlgP.open) dlgP.close(); scanStep('choose'); }
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    if (window.Tesseract) { res(); return; }
+    const el = document.createElement('script');
+    el.src = src; el.async = true;
+    el.onload = () => res();
+    el.onerror = () => { el.remove(); rej(new Error('글자 인식 프로그램을 내려받지 못했어요. 인터넷 연결을 확인해 주세요.')); };
+    document.head.append(el);
+  });
+}
+let ocrWorker = null, ocrStage = ''; // 한 번 만든 인식기는 다시 쓴다
+function getOcr() {
+  if (!ocrWorker) {
+    ocrWorker = loadScript(OCR_JS).then(() => window.Tesseract.createWorker('kor', 1, { logger: ocrLog }));
+    ocrWorker.catch(() => { ocrWorker = null; });
+  }
+  return ocrWorker;
+}
+const OCR_MSG = {
+  'loading tesseract core': '글자 인식 프로그램 받는 중', 'initializing tesseract': '준비 중',
+  'loading language traineddata': '한글 인식 데이터 받는 중 (처음 한 번만)', 'initializing api': '준비 중', 'recognizing text': '글자 읽는 중',
+};
+function ocrLog(m) {
+  const label = OCR_MSG[m.status];
+  if (label && dlgS.open) $('#s-busy-msg').textContent = `${ocrStage}${label}${m.progress ? ` ${Math.round(m.progress * 100)}%` : ''}`;
+}
+
+/** 사진 → 글자 읽기 좋은 크기의 canvas (긴 변 2400px 이하) + 작은 미리보기 */
+async function prepCanvas(file) {
+  let src;
+  try { src = await createImageBitmap(file); }
+  catch {
+    src = await new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => rej(new Error('사진을 열 수 없어요.')); img.src = URL.createObjectURL(file); });
+  }
+  const draw = (max) => {
+    const sc = Math.min(1, max / Math.max(src.width, src.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(src.width * sc); cv.height = Math.round(src.height * sc);
+    cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+    return cv;
+  };
+  return { canvas: draw(2400), thumb: draw(160).toDataURL('image/jpeg', 0.7) };
+}
+
+async function runOcr(files) {
+  files = [...files].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name)).slice(0, MAX_PHOTOS);
+  if (!files.length) return;
+  const run = { cancel: false };
+  scanRun = run;
+  scanStep('busy');
+  $('#s-thumbs').innerHTML = '';
+  $('#s-busy-msg').textContent = '사진 준비 중…';
+  try {
+    const pics = [];
+    for (const f of files) {
+      const pic = await prepCanvas(f);
+      pics.push(pic);
+      $('#s-thumbs').insertAdjacentHTML('beforeend', `<img src="${pic.thumb}" alt="">`);
+    }
+    const w = await getOcr();
+    let text = '';
+    for (let i = 0; i < pics.length; i++) {
+      if (run.cancel) return;
+      ocrStage = pics.length > 1 ? `사진 ${i + 1}/${pics.length} · ` : '';
+      const { data } = await w.recognize(pics[i].canvas);
+      text += `${data.text}\n\n`;
+    }
+    if (!run.cancel) reviewFromText(text, 'ocr');
+  } catch (err) {
+    if (!run.cancel) showScanError(err);
+  }
+}
+
+function showScanError(err) {
+  $('#s-error-msg').textContent = (err && err.message) || '알 수 없는 오류가 났어요.';
+  scanStep('error');
+}
+
+function reviewFromText(text, source) {
+  scanText = text;
+  const raws = parseText(text);
+  scanRows = raws.map(fromScan);
+  scanNote = !raws.length
+    ? (source === 'ocr'
+      ? '보험을 찾지 못했어요. 손글씨나 흐린 사진은 폰 글자 인식이 잘 못 읽어요. ‘글자 붙여넣기’로 해 보세요.'
+      : '보험을 찾지 못했어요. 보험사 이름과 금액(원)이 들어 있는지 확인해 주세요.')
+    : source === 'ocr' ? '폰에서 글자를 읽은 결과예요. 숫자가 틀리기 쉬우니 꼭 확인해 주세요.' : '';
+  renderScanRows();
+  scanStep('review');
+}
+
+/* ── 읽은 글자 → 보험 목록 ──
+ * 보험 앱 카드(보험사/상품명 → 월 보험료 → ○% 납부 ○원 남음), 보험증권(항목: 값),
+ * 한 줄에 하나씩 적은 표(이름 … 금액 … 끝나는 해), 엑셀 양식 CSV를 모두 받는다. */
+const INSURER_ALIASES = [
+  ['삼성생명', ['삼성생명']], ['삼성화재', ['삼성화재']], ['한화생명', ['한화생명']], ['한화손해보험', ['한화손해', '한화손보']],
+  ['교보생명', ['교보']], ['신한라이프', ['신한라이프', '신한생명', '오렌지라이프']], ['NH농협생명', ['농협생명', 'NH생명', 'NH농협생명']],
+  ['NH농협손해보험', ['농협손해', 'NH손해', 'NH농협손해']], ['동양생명', ['동양생명']], ['미래에셋생명', ['미래에셋']],
+  ['흥국생명', ['흥국생명']], ['흥국화재', ['흥국화재']], ['KB라이프', ['KB라이프', 'KB생명', '푸르덴셜']], ['KDB생명', ['KDB']],
+  ['KB손해보험', ['KB손해', 'KB손보', 'LIG']], ['DB손해보험', ['DB손해', 'DB손보', '동부화재']], ['DB생명', ['DB생명', '동부생명']],
+  ['현대해상', ['현대해상', '하이카']], ['메리츠화재', ['메리츠']], ['롯데손해보험', ['롯데']], ['AIA생명', ['AIA']],
+  ['라이나생명', ['라이나']], ['메트라이프', ['메트라이프', 'METLIFE']], ['ABL생명', ['ABL', '알리안츠']], ['푸본현대생명', ['푸본']],
+  ['처브라이프', ['처브']], ['하나손해보험', ['하나손해', '하나손보']], ['AXA손해보험', ['AXA', '악사']], ['우체국보험', ['우체국']],
+  ['iM라이프', ['IM라이프', 'DGB생명']], ['새마을금고', ['새마을']], ['신협', ['신협']],
+];
+/** 글에서 가장 먼저 나오는 보험사 */
+function findInsurer(t) {
+  const up = String(t).toUpperCase();
+  let best = '', at = Infinity;
+  for (const [name, aliases] of INSURER_ALIASES) for (const a of aliases) { const i = up.indexOf(a.toUpperCase()); if (i >= 0 && i < at) { at = i; best = name; } }
+  return best;
+}
+const TYPE_WORDS = [
+  ['실손', /실손|실비|의료비/], ['암', /암보험|암진단|(^|\s)암(\s|$)|캔서/], ['치아', /치아|덴탈/], ['간병', /간병|치매|요양|케어/],
+  ['운전자', /운전자|운전/], ['어린이', /어린이|자녀|태아|키즈/], ['연금', /연금/], ['저축', /저축|적립/], ['종신', /종신/],
+  ['정기', /정기/], ['화재', /화재보험|주택|재물/], ['자동차', /자동차|다이렉트/], ['건강', /건강|보장|CI|질병|상해|통합|뇌|심장/],
+];
+const guessType = (t) => (TYPE_WORDS.find(([, re]) => re.test(t)) || ['기타'])[0];
+
+/** 줄 안의 금액들. 연도·나이·회차·상품 번호·퍼센트는 뺀다. ok=false 는 쉼표 자리가 이상한 숫자(잘못 읽었을 가능성) */
+function amounts(l) {
+  const out = [];
+  for (const m of l.matchAll(/(\d+(?:\.\d+)?)\s*만\s*원/g)) out.push({ v: Math.round(parseFloat(m[1]) * 10000), ok: true, won: true });
+  for (const m of l.matchAll(/(\d[\d,.]*\d|\d)\s*([원%¢€₩]|세|년|회|건|만)?/g)) {
+    const raw = m[1], tail = m[2] || '', plain = raw.replace(/[,.]/g, ''), v = +plain;
+    if (/[세년회건만]/.test(tail)) continue;
+    const grouped = /^\d{1,3}([,.]\d{3})+$/.test(raw);
+    if (/\./.test(raw) && !grouped) continue;                         // 34.4 같은 소수, 2018.03.15 같은 날짜
+    if (tail === '%' && plain.length <= 3) continue;                   // 진짜 퍼센트
+    const won = tail !== '' && tail !== '%' || (tail === '%' && plain.length > 3); // OCR이 '원'을 %로 읽기도 함
+    if (!won && !/[,]/.test(raw) && plain.length < 5) continue;        // 1704 같은 상품 번호, 2033 같은 연도
+    if (!won && /^(19|20)\d{2}$/.test(plain)) continue;
+    out.push({ v, ok: grouped || /^\d+$/.test(raw), won });
+  }
+  return out;
+}
+
+const LABEL = /^[^가-힣A-Za-z0-9]*(피보험자|계약자|보험\s*기간|보험료|납입|보험금|가입\s*금액|증권|수익자|특약|주계약|청약|계약일|가입일|보장\s*내용|월\s*보험료)/;
+const PROD = /보험|공제|연금|플랜|케어|종신|실손|실비/;
+const TITLE = /^내\s*보험|^\d{1,2}:\d{2}|보험\s*\d+\s*건/;
+const isHead = (l) => !LABEL.test(l) && !/남음|납부/.test(l) && (PROD.test(l) || !!findInsurer(l));
+const DATE = /((?:19|20)\d{2})\s*[.\-/년]\s*(\d{1,2})/g;
+
+function parseText(text) {
+  text = String(text || '').replace(/```[a-z]*/gi, '');
+  const recs = csvRecords(text);
+  if (recs) return recs.map(recToRaw);
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length > 1 && !TITLE.test(l) && /[가-힣\d]/.test(l));
+  const freq = {};
+  for (const l of lines) { const n = findInsurer(l); if (n) freq[n] = (freq[n] || 0) + 1; }
+  const common = (Object.entries(freq).sort((a, b) => b[1] - a[1])[0] || [''])[0]; // 보험사가 안 보이는 카드에 쓴다
+
+  const blocks = [];
+  let cur = null;
+  for (const l of lines) {
+    const amt = amounts(l).filter((a) => a.v <= 10000000);
+    const premLine = /보험료|납입액|납입\s*금액|월납|연납/.test(l) && amt.length > 0;
+    const head = isHead(l);
+    if (head && amt.length && !premLine) { // 한 줄에 이름과 금액이 같이 있는 표
+      blocks.push({ lines: [l], prem: amt[amt.length - 1], inline: true });
+      cur = null;
+      continue;
+    }
+    if (head && (!cur || cur.prem)) { cur = { lines: [] }; blocks.push(cur); }
+    if (!cur) { cur = { lines: [] }; blocks.push(cur); }
+    cur.lines.push(l);
+    if (premLine && !cur.prem) cur.prem = amt.find((a) => a.won) || amt[0];
+  }
+  return blocks.map((b) => blockToRaw(b, common)).filter((r) => r.premium > 0 && (r.insurer || r.product));
+}
+
+function blockToRaw(b, common) {
+  const T = b.lines.join('\n');
+  const insurer = findInsurer(T) || common;
+  const prodLine = b.lines.filter((l) => PROD.test(l) && !LABEL.test(l) && !/남음|납부/.test(l)).sort((x, y) => y.length - x.length)[0] || '';
+  const product = prodLine
+    .replace(/\d[\d,.]*\s*(원|%)?/g, (m) => (b.inline ? ' ' : m))
+    .replace(/[—–_~=·]+|-{2,}/g, ' ')
+    .replace(/^[^가-힣A-Za-z]*(\((보험|저축|연금)\))?[^가-힣A-Za-z]*/, '')
+    .replace(/\s+/g, ' ').trim();
+  const type = guessType(`${product} ${T}`);
+  const remLine = b.lines.find((l) => /남음/.test(l));
+  const rem = remLine ? amounts(remLine).pop() : null;
+  const pct = T.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*납부/);
+  const yrs = T.match(/(\d{1,2})\s*년\s*납/) || T.match(/납입\s*기간\D{0,6}(\d{1,2})\s*년/);
+  let start = '', end = '';
+  for (const l of b.lines) {
+    const ds = [...l.matchAll(DATE)].map((m) => `${m[1]}-${pad(+m[2])}`);
+    if (!ds.length) continue;
+    if (/납입\s*기간/.test(l) && ds.length > 1) { start = start || ds[0]; end = end || ds[ds.length - 1]; }
+    else if (/납입\s*(만기|만료|종료|끝)/.test(l)) end = end || ds[ds.length - 1];
+    else if (/계약일|가입일|계약\s*일자|청약일|납입\s*시작/.test(l)) start = start || ds[0];
+    else if (/보험\s*기간/.test(l)) start = start || ds[0];
+  }
+  if (b.inline && !end) { // 손으로 적은 표: 줄 안의 20xx 중 가장 늦은 해를 끝나는 해로
+    const ys = (T.match(/(?<![\d,.])20[1-9]\d(?![\d,.])/g) || []).map(Number);
+    if (ys.length) end = String(Math.max(...ys));
+  }
+  const cover = (T.match(/(\d{2,3})\s*세\s*(만기|까지|보장)/) || [])[1];
+  const unsure = !!b.inline || !(b.prem && b.prem.ok) || !!(rem && !rem.ok);
+  const short = insurer.replace(/(생명|화재|손해보험|해상|라이프)$/, '');
+  return {
+    insured: (T.match(/피보험자\s*[:：]?\s*([가-힣]{2,4})/) || [])[1] || '',
+    insurer, product, type,
+    name: insurer ? `${short} ${type === '기타' ? '' : type}`.trim() : product.slice(0, 12),
+    premium: b.prem ? b.prem.v : 0, cycle: /연납/.test(T) ? 'Y' : 'M',
+    start, end, years: yrs ? +yrs[1] : 0, renewable: /갱신/.test(T) || type === '실손',
+    paidPct: pct ? +pct[1] : 0, remainAmount: rem ? rem.v : 0,
+    cover: cover ? `${cover}세` : /종신/.test(product) ? '종신' : '',
+    payStart: '', payYears: 0, payAmt: 0, cancelled: /해지|실효/.test(T), cancelMonth: '', unsure, memo: '',
+  };
+}
+
+/** 엑셀 양식 CSV(직접 쓴 것, Claude 앱이 만든 것) 한 줄 → 확인 화면용 */
+function recToRaw(o) {
+  const yrs = parseFloat(o.years) || 0;
+  return {
+    insured: o.who || '', insurer: o.insurer || '', name: o.name || '', product: o.product || '',
+    type: TYPES.includes(o.type) ? o.type : guessType(`${o.type || ''} ${o.product || ''} ${o.name || ''}`),
+    premium: digits(o.premium), cycle: /연/.test(o.cycle || '') ? 'Y' : 'M', start: o.start || '', end: o.end || '', years: yrs,
+    renewable: !o.end && !yrs, paidPct: 0, remainAmount: 0, cover: o.cover || '',
+    payStart: o.payStart || '', payYears: parseInt(o.payYears, 10) || 0, payAmt: digits(o.payAmt),
+    cancelled: !!o.cancel, cancelMonth: o.cancel || '', unsure: false, memo: o.memo || '',
+  };
+}
+
+const CLAUDE_PROMPT = () => `이 사진 속 보험들을 아래 첫 줄 형식의 CSV로만 답해 줘. 첫 줄은 그대로 쓰고 보험 하나당 한 줄, 모르는 칸은 비워 둬. 금액은 숫자만, 날짜는 YYYY-MM (연도만 알면 YYYY). 줄을 그어 지운 보험은 해지월 칸에 '해지'라고 적어 줘. 아이디·비밀번호 같은 개인정보는 적지 마.
+${CSV_COLS.map((c) => c[1]).join(',')}`;
+async function copyPrompt() {
+  const t = CLAUDE_PROMPT();
+  try { await navigator.clipboard.writeText(t); toast('복사했어요. Claude 앱에 사진과 함께 붙여넣고, 받은 표를 여기에 붙여넣으세요.'); }
+  catch { $('#s-text').value = t; $('#s-text').select(); toast('자동 복사가 안 돼서 아래 칸에 넣어 뒀어요. 길게 눌러 복사하세요.'); }
+}
+
+const yearOnly = (v) => /^\s*\d{4}\s*$/.test(v || '');
+const normName = (s) => String(s || '').replace(/\s|(생명|화재|손해보험|손보|라이프|보험)$/g, '');
+
+/** AI가 읽은 한 줄 → 확인 화면용 데이터 (빈 값 채우기 + 확인할 점 표시) */
+function fromScan(r) {
+  const per = r.cycle === 'Y' ? 12 : 1;
+  const premium = Math.max(0, Math.round(+r.premium || 0));
+  let open = !!r.renewable;
+  let s = ym(r.start);
+  let e = open ? null : yearOnly(r.end) ? +r.end.trim() * 12 + 11 : ym(r.end);
+  const warn = [];
+  if (!open) {
+    if (e == null && s != null && r.years > 0) e = s + Math.round(r.years * 12) - 1;
+    if (r.remainAmount > 0 && premium > 0) {
+      const left = Math.round(r.remainAmount / premium);
+      if (e == null) e = NOW + left * per;
+      if (s == null && r.paidPct > 0 && r.paidPct < 100) {
+        const total = totalFrom(left, r.paidPct, per);
+        s = NOW - (total - left - 1) * per;
+      }
+    }
+    if (e != null && e - NOW > 80 * 12) { e = null; open = true; warn.push('끝이 너무 멀어서 갱신형으로 넣었어요'); }
+  }
+  if (yearOnly(r.start) || (!open && yearOnly(r.end))) warn.push('월은 몰라서 추정했어요');
+  if (r.unsure) warn.push('숫자를 확실히 못 읽었어요. 금액·연도를 꼭 확인해 주세요');
+
+  const insured = String(r.insured || '').trim();
+  const hit = insured && db.members.find((m) => m.name === insured || insured.includes(m.name) || m.name.includes(insured));
+  if (insured && !hit) warn.push(`사진 속 피보험자: ${insured}`);
+  const dup = db.policies.some((p) => p.premium === premium && normName(p.insurer) === normName(r.insurer));
+  if (dup) warn.push('이미 등록된 보험 같아요');
+  if (r.cancelled) warn.push('해지한 보험으로 보여요. 등록하면 ‘해지한 보험’에 들어가요');
+
+  return {
+    on: !dup && !r.cancelled,
+    who: hit ? hit.id : ui.who !== 'all' ? ui.who : db.members[0].id,
+    insurer: String(r.insurer || '').trim(), name: String(r.name || '').trim().slice(0, 20), product: String(r.product || '').trim(),
+    type: TYPES.includes(r.type) ? r.type : '기타', premium, cycle: r.cycle === 'Y' ? 'Y' : 'M',
+    start: ymStr(s), end: ymStr(e), open,
+    cover: String(r.cover || ''), payStart: ymStr(yearOnly(r.payStart) ? +r.payStart.trim() * 12 : ym(r.payStart)),
+    payYears: +r.payYears || null, payAmt: +r.payAmt || null,
+    cancel: r.cancelled ? (ymStr(ym(r.cancelMonth)) || ymStr(NOW)) : '',
+    memo: String(r.memo || '').trim(), warn, err: '',
+  };
+}
+
+function renderScanRows() {
+  const n = scanRows.length;
+  $('#s-title').textContent = n ? `찾은 보험 ${n}건` : '보험을 찾지 못했어요';
+  $('#s-note').textContent = scanNote;
+  $('#s-err').textContent = '';
+  $('#s-raw').textContent = scanText;
+  $('#s-rows').innerHTML = scanRows.map((r, i) => `
+    <div class="srow${r.on ? '' : ' off'}${r.err ? ' bad' : ''}" data-i="${i}">
+      <div class="srow-top">
+        <label class="srow-on"><input type="checkbox" data-f="on"${r.on ? ' checked' : ''}><b>${esc(r.name || r.insurer || '이름 없음')}</b></label>
+        <select data-f="who" aria-label="누구 보험">${db.members.map((m) => `<option value="${m.id}"${m.id === r.who ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>
+      </div>
+      <div class="grid2">
+        <label>보험사<input data-f="insurer" value="${esc(r.insurer)}" list="insurerList"></label>
+        <label>이름<input data-f="name" value="${esc(r.name)}" maxlength="20"></label>
+      </div>
+      <div class="grid2">
+        <label>${r.cycle === 'Y' ? '연' : '월'} 납입액<input class="money" data-f="premium" inputmode="numeric" value="${r.premium ? won(r.premium) : ''}"></label>
+        <label>종류<select data-f="type">${TYPES.map((t) => `<option${t === r.type ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+      </div>
+      <div class="grid2">
+        <label>납입 시작 <small>모르면 비움</small><input type="month" data-f="start" value="${r.start}"></label>
+        <label>납입 끝<input type="month" data-f="end" value="${r.end}"${r.open ? ' disabled' : ''}></label>
+      </div>
+      <label class="check sm"><input type="checkbox" data-f="open"${r.open ? ' checked' : ''}><span>갱신형 · 끝 없음</span></label>
+      ${r.product ? `<p class="srow-sub">${esc(r.product)}</p>` : ''}
+      ${r.memo ? `<p class="srow-sub">메모: ${esc(r.memo)}</p>` : ''}
+      ${r.warn.map((w) => `<p class="srow-warn">⚠ ${esc(w)}</p>`).join('')}
+      ${r.err ? `<p class="err">${esc(r.err)}</p>` : ''}
+    </div>`).join('');
+  updateScanCount();
+}
+function updateScanCount() {
+  const n = scanRows.filter((r) => r.on).length;
+  const b = $('#s-save');
+  b.textContent = n ? `${n}건 등록` : '등록할 보험 없음';
+  b.disabled = !n;
+}
+
+function saveScan() {
+  let bad = 0;
+  for (const r of scanRows) {
+    r.err = r.on ? policyError(r, r.open) : '';
+    if (r.err) bad++;
+  }
+  if (bad) { renderScanRows(); $('#s-err').textContent = `${bad}건에 빠진 값이 있어요. 빨간 글씨를 확인해 주세요.`; return; }
+  const add = scanRows.filter((r) => r.on).map((r) => ({
+    id: uid(), who: r.who, insurer: r.insurer, product: r.product, type: r.type,
+    name: r.name || `${r.insurer.replace(/(생명|화재|손해보험|라이프)$/, '')} ${r.type}`.trim(),
+    premium: r.premium, cycle: r.cycle, start: r.start, end: r.open ? '' : r.end,
+    cover: r.cover, payday: null, payStart: r.payStart, payYears: r.payYears, payAmt: r.payAmt,
+    cancel: r.cancel, memo: r.memo,
+  }));
+  db.policies.push(...add);
+  save(); dlgS.close(); render(); persist();
+  toast(`${add.length}건을 등록했어요. 틀린 곳은 눌러서 고치세요.`);
+}
+
+$('#s-rows').addEventListener('input', (e) => {
+  const el = e.target, row = el.closest('[data-i]');
+  if (!row || !el.dataset.f) return;
+  const r = scanRows[+row.dataset.i], f = el.dataset.f;
+  if (el.classList.contains('money')) { const n = digits(el.value); el.value = n ? won(n) : ''; r[f] = n; return; }
+  if (el.type === 'checkbox') {
+    r[f] = el.checked;
+    if (f === 'on') { row.classList.toggle('off', !el.checked); updateScanCount(); }
+    if (f === 'open') $('[data-f=end]', row).disabled = el.checked;
+    return;
+  }
+  r[f] = f === 'start' || f === 'end' ? ymStr(ym(el.value)) : el.value.trim();
+  if (f === 'name' || f === 'insurer') $('.srow-on b', row).textContent = r.name || r.insurer || '이름 없음';
+});
+$('#s-rows').addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') e.target.dispatchEvent(new Event('input', { bubbles: true })); });
+$('#scanFile').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; runOcr(fs); });
+dlgS.addEventListener('close', () => { if (scanRun) scanRun.cancel = true; });
+
+let toastT;
+function toast(text) {
+  const t = $('#toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3500);
+}
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
   settings: () => { renderMembers(); $('#dlgSettings').showModal(); },
+  scan: openScan,
+  saveScan,
+  scanMore: () => scanStep('choose'),
+  pickPhoto: () => $('#scanFile').click(),
+  pasteMode: () => { $('#s-text').value = ''; scanStep('paste'); },
+  editText: () => { $('#s-text').value = scanText; scanStep('paste'); },
+  parsePaste: () => { const t = $('#s-text').value; if (t.trim()) reviewFromText(t, 'paste'); else toast('글자를 먼저 붙여넣어 주세요.'); },
+  copyPrompt,
+  cancelScan: () => { if (scanRun) scanRun.cancel = true; dlgS.close(); },
   addMember: () => openMember(null),
   deleteMember,
   deletePolicy: () => {

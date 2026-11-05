@@ -43,6 +43,7 @@
 <dialog id="dlgPolicy" class="sheet">
 <form id="fPolicy" novalidate>
   <h2 id="pTitle">보험 추가</h2>
+  <button type="button" class="btn scanbtn" id="pScan" data-act="scan">📷 사진으로 한 번에 등록<small>보험 앱 캡처 · 보험증권 · 손글씨는 글자 붙여넣기 (무료)</small></button>
 
   <fieldset>
     <legend>누구 보험인가요? <small>(보장받는 사람)</small></legend>
@@ -62,7 +63,7 @@
   </div>
 
   <div class="grid2">
-    <label>납입 시작 <small>계약월</small><input id="p-start" type="month" placeholder="2018-03"></label>
+    <label>납입 시작 <small>모르면 비움</small><input id="p-start" type="month" placeholder="2018-03"></label>
     <label>납입 기간<span class="unit"><input id="p-years" type="number" inputmode="decimal" min="0" step="any" placeholder="20">년</span></label>
   </div>
   <div class="quick" aria-label="납입 기간 빠른 선택">
@@ -151,6 +152,7 @@
   </p>
   <ol class="note">
     <li><a href="https://www.credit4u.or.kr" target="_blank" rel="noopener">내보험다보여(신용정보원) ↗</a>에서 본인 명의 보험을 한 번에 조회해 옮겨 적기 (가족은 각자 본인인증)</li>
+    <li>보험 앱 화면이나 보험증권을 ‘사진으로 등록’ (폰 안에서 무료로 글자 인식)</li>
     <li>보험 앱의 ‘○% 납부 · ○원 남음’ 숫자로 납입기간 계산하기 (보험 추가 화면)</li>
     <li>엑셀 양식에 한꺼번에 적어서 ‘불러오기’</li>
   </ol>
@@ -164,6 +166,66 @@
 </div>
 </dialog>
 
+<!-- 사진으로 등록 (무료 · 폰 안에서 글자 인식) -->
+<dialog id="dlgScan" class="sheet">
+<div class="in">
+  <section data-step="choose">
+    <h2>사진으로 등록</h2>
+    <p class="note">보험 앱 캡처나 보험증권처럼 <b>인쇄된 글자</b>는 폰 안에서 바로 읽어요. 무료이고 사진은 밖으로 나가지 않아요.</p>
+    <button type="button" class="btn primary wide big" data-act="pickPhoto">📷 사진 고르기<small>보험 앱 캡처 · 보험증권 · 한 번에 5장까지</small></button>
+    <button type="button" class="btn wide big" data-act="pasteMode">📋 글자 붙여넣기<small>손글씨 사진 · 다른 앱에서 복사한 글자 · 엑셀 표</small></button>
+    <p class="note small">처음 한 번은 한글 인식 데이터(약 5MB)를 내려받아요. 와이파이에서 하시는 걸 권해요.</p>
+    <button type="button" class="btn wide" data-close>닫기</button>
+  </section>
+
+  <section data-step="paste" hidden>
+    <h2>글자 붙여넣기</h2>
+    <p class="note">손글씨는 폰 글자 인식이 잘 못 읽어요. 아래 중 편한 방법으로 글자를 복사해 붙여넣으면 보험을 찾아 드려요.</p>
+    <ol class="note">
+      <li><b>삼성 갤러리</b>: 사진 열기 → 오른쪽 아래 <b>T</b>(텍스트 추출) → 모두 선택 → 복사</li>
+      <li><b>Google 렌즈</b>: 사진에서 <b>텍스트</b> → 모두 선택 → 복사</li>
+      <li><b>Claude 앱</b>(구독 중이면 추가 비용 없음): <button type="button" class="link" data-act="copyPrompt">요청문 복사</button> → Claude 앱에 사진과 함께 보내기 → 받은 표를 복사</li>
+    </ol>
+    <textarea id="s-text" rows="8" placeholder="여기에 붙여넣기"></textarea>
+    <div class="actions">
+      <button type="button" class="btn" data-act="scanMore">뒤로</button>
+      <button type="button" class="btn primary" data-act="parsePaste">보험 찾기</button>
+    </div>
+  </section>
+
+  <section data-step="busy" hidden>
+    <h2>사진 읽는 중</h2>
+    <div class="thumbs" id="s-thumbs"></div>
+    <div class="spin" aria-hidden="true"></div>
+    <p class="note center" id="s-busy-msg" aria-live="polite"></p>
+    <button type="button" class="btn wide" data-act="cancelScan">취소</button>
+  </section>
+
+  <section data-step="review" hidden>
+    <h2 id="s-title"></h2>
+    <p class="note" id="s-note"></p>
+    <div id="s-rows"></div>
+    <details class="rawtext"><summary>읽은 글자 보기</summary><pre id="s-raw"></pre></details>
+    <p class="err" id="s-err" role="alert"></p>
+    <div class="actions sticky">
+      <button type="button" class="btn" data-act="editText">글자 고치기</button>
+      <button type="button" class="btn primary" data-act="saveScan" id="s-save">등록</button>
+    </div>
+  </section>
+
+  <section data-step="error" hidden>
+    <h2>사진을 읽지 못했어요</h2>
+    <p class="note pre" id="s-error-msg"></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>닫기</button>
+      <button type="button" class="btn primary" data-act="scanMore">다시 하기</button>
+    </div>
+  </section>
+</div>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+<input type="file" id="scanFile" accept="image/*" multiple hidden>
 <datalist id="insurerList"></datalist>
 <input type="file" id="fileIn" accept=".json,.csv,application/json,text/csv" hidden>
 
