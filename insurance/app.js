@@ -218,7 +218,7 @@ function summaryHTML(list) {
     <div class="sum-sub">1년이면 ${manwon(monthly * 12)} · 내는 중 ${nPay}건${nDone ? ` · 완납 ${nDone}건` : ''}</div>
     ${family}
     <div class="stats">
-      <div><small>지금까지 낸 돈</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
+      <div><small>납부한 금액</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
       <div><small>남은 납부액</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
     </div>
   </div>`;
@@ -245,7 +245,7 @@ function timelineHTML(list) {
 
   // 눈금 간격: 연도 글자가 겹치지 않을 만큼 (화면 폭으로 그래프 폭을 어림)
   const w = Math.min(window.innerWidth, 1200);
-  const cols = w <= 370 ? 150 : w >= 700 ? 298 : w >= 500 ? 212 : 174; // style.css 의 --nw + --aw + 간격
+  const cols = w <= 370 ? 162 : w >= 700 ? 316 : w >= 500 ? 220 : 186; // style.css 의 --nw + --aw + 간격
   const plotW = w - (w >= 700 ? 48 : 32) - 24 - cols;
   const step = [1, 2, 5, 10, 20].find((st) => (plotW * st * 12) / span >= 34) || 20;
   const ticks = [];
@@ -257,13 +257,14 @@ function timelineHTML(list) {
   const multi = new Set(rows.map((r) => r.m.id)).size > 1;
 
   const remainOf = (list) => list.reduce((a, r) => a + (r.k.status !== 'done' && r.k.remainAmt != null ? r.k.remainAmt : 0), 0);
+  const paidOf = (list) => list.reduce((a, r) => a + r.k.paidAmt, 0);
   let body = '', last = null, total = 0;
   for (const { p, k, m } of rows) {
     if (multi && m !== last) {
       last = m;
       const mine = rows.filter((r) => r.m === m);
       const sum = mine.filter((r) => r.k.status === 'paying').reduce((a, r) => a + r.k.monthly, 0);
-      body += `<div class="tl-group"><i style="background:var(--m${m.slot})"></i>${esc(m.name)}<span>월 ${won(sum)} · 남은 ${money2(remainOf(mine))}</span></div>`;
+      body += `<div class="tl-group"><i style="background:var(--m${m.slot})"></i>${esc(m.name)}<span>월 ${won(sum)} · 납부 ${money2(paidOf(mine))} · 남은 ${money2(remainOf(mine))}</span></div>`;
     }
     if (k.status === 'paying') total += k.monthly;
     const open = k.e == null;
@@ -282,8 +283,9 @@ function timelineHTML(list) {
     const age = ageAt(focus, open ? NOW : k.e);
     const lbl = open ? '갱신형 · 계속' : k.status === 'done' ? `${Math.floor(k.e / 12)} 완납` : `${Math.floor(k.e / 12)}${age != null ? ` · ${age}세` : ''}`;
     const lx = open ? x0 : x1;
-    const amt = k.status === 'done' ? '<small>완납</small>'
-      : `<b>${won(k.monthly)}</b><small>${k.remainAmt == null ? '갱신형' : money2(k.remainAmt)}</small>`;
+    const paid = `<small>납부 ${k.paidN != null ? money2(k.paidAmt) : '?'}</small>`;
+    const amt = k.status === 'done' ? `<b class="fin">완납</b>${paid}`
+      : `<b>${won(k.monthly)}</b>${paid}<small>남은 ${k.remainAmt == null ? '갱신형' : money2(k.remainAmt)}</small>`;
     body += `<button class="tl-row ${k.status}" data-id="${p.id}" style="--c:var(--m${m.slot})" title="${esc(tip)}">
       <span class="tl-name"><b>${esc(p.name)}</b><small>${esc(p.insurer)}${p.cycle === 'Y' ? ' · 연납' : ''}</small></span>
       <span class="tl-track">${marks}<em class="lbl${lx > 62 ? ' r' : ''}" style="left:${pc(lx)}">${lbl}</em></span>
@@ -296,9 +298,9 @@ function timelineHTML(list) {
     <div class="tl-axis"><span class="tl-h">보험</span><span class="tl-track">${ticks.map((y) => {
       const a = ageAt(focus, y * 12);
       return `<em style="left:${pc(X(y * 12))}">${y}${a != null ? `<small>${a}세</small>` : ''}</em>`;
-    }).join('')}</span><span class="tl-h r">월납입액<small>남은 납부액</small></span></div>
+    }).join('')}</span><span class="tl-h r">월납입액<small>납부 · 남은</small></span></div>
     ${body}
-    <div class="tl-foot"><span>합계</span><span class="tl-track"><em style="left:${pc(X(today))}">오늘</em></span><span class="tl-amt"><b>${won(total)}</b><small>${money2(remainOf(rows))}</small></span></div>
+    <div class="tl-foot"><span>합계</span><span class="tl-track"><em style="left:${pc(X(today))}">오늘</em></span><span class="tl-amt"><b>${won(total)}</b><small>납부 ${money2(paidOf(rows))}</small><small>남은 ${money2(remainOf(rows))}</small></span></div>
   </div>
   <p class="tl-legend"><span><i class="lg-bar"></i>내는 기간</span><span><i class="lg-recv"></i>받는 기간</span><span><i class="lg-now"></i>오늘</span>${focus.birth ? `<span>나이: ${esc(focus.name)} 기준</span>` : ''}${hidden ? `<span>예전에 다 낸 ${hidden}건은 ‘보험별 상세’에</span>` : ''}</p>
   </div>`;
@@ -312,23 +314,26 @@ function cardHTML(p) {
   const when = k.status === 'paying' ? (k.left != null ? (k.left ? `완납까지 ${dur(k.left)}` : '이번 달이 마지막') : '')
     : k.status === 'before' ? `${ymDot(k.s)} 시작` : '';
 
+  // 납부율 막대 + 아래 두 칸(납부한 금액 / 남은 납부액)
   let meter = '', foot;
+  const box = (label, val) => `<div><small>${label}</small><b>${val}</b></div>`;
+  const paidBox = box('납부한 금액', k.paidN != null ? `${won(k.paidAmt)}원` : '시작 월 모름');
+  let amts = paidBox;
   if (k.status === 'cancelled') {
-    foot = `<span>해지 ${ymDot(k.c)}</span><span>${k.paidN != null ? `${won(k.paidAmt)}원 냄` : ''}</span>`;
+    foot = `<span>해지 ${ymDot(k.c)}</span><span></span>`;
   } else if (k.e == null) {
-    foot = k.paidN != null
-      ? `<span>계속 납입 · ${k.paidN}회째</span><span>지금까지 ${won(k.paidAmt)}원</span>`
-      : '<span>계속 납입 · 시작 월 모름</span><span></span>';
-  } else if (k.pct == null) {
-    foot = k.status === 'done'
-      ? '<span class="ok">✓ 납입완료</span><span></span>'
-      : `<span>시작 월 모름 · 남은 ${k.remainN}회</span><span>${won(k.remainAmt)}원 남음</span>`;
+    foot = `<span>계속 납입${k.paidN != null ? ` · ${k.paidN}회째` : ''}</span><span></span>`;
+    amts += box('남은 납부액', '갱신형');
+  } else if (k.status === 'done') {
+    if (k.pct != null) meter = '<div class="meter done"><i style="width:100%"></i></div>';
+    foot = `<span class="ok">✓ 납입완료</span><span>${k.paidN != null ? `${k.paidN}회 냄` : ''}</span>`;
   } else {
-    const pct = k.pct * 100;
-    meter = `<div class="meter${k.status === 'done' ? ' done' : ''}"><i style="width:${pct.toFixed(1)}%"></i></div>`;
-    foot = k.status === 'done'
-      ? `<span class="ok">✓ 납입완료</span><span>총 ${won(k.paidAmt)}원 냄</span>`
-      : `<span>${pct.toFixed(1)}% 납부 · ${k.paidN}/${k.totalN}회</span><span>${won(k.remainAmt)}원 남음</span>`;
+    if (k.pct != null) {
+      const pct = k.pct * 100;
+      meter = `<div class="meter"><i style="width:${pct.toFixed(1)}%"></i></div>`;
+      foot = `<span>${pct.toFixed(1)}% 납부 · ${k.paidN}/${k.totalN}회</span><span>남은 ${k.remainN}회</span>`;
+    } else foot = `<span>남은 ${k.remainN}회</span><span></span>`;
+    amts += box('남은 납부액', `${won(k.remainAmt)}원`);
   }
   const ps = ym(p.payStart);
   const recv = ps != null
@@ -345,6 +350,7 @@ function cardHTML(p) {
     <div class="pol-period"><span>${period}</span><span>${when}</span></div>
     ${meter}
     <div class="pol-foot">${foot}</div>
+    <div class="pol-amts">${amts}</div>
     ${recv}
     ${p.memo ? `<div class="pol-memo">${esc(p.memo)}</div>` : ''}
   </article>`;
