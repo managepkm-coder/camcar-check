@@ -384,7 +384,7 @@ function payoutsHTML(list) {
 function emptyHTML() {
   return `<div class="card empty">
     <h2>보험을 추가해 보세요</h2>
-    <p>월 납입액과 납입기간만 넣으면 매달 얼마가 나가는지, 언제 다 내는지 한눈에 보여 드려요. 보험증권·보험 앱 캡처·손으로 적은 표 사진을 올리면 AI가 읽어서 채워 줘요.</p>
+    <p>월 납입액과 납입기간만 넣으면 매달 얼마가 나가는지, 언제 다 내는지 한눈에 보여 드려요. 보험 앱 캡처나 보험증권 사진을 올리면 글자를 읽어서 채워 줘요.</p>
     <button class="btn primary wide" data-act="scan">📷 사진으로 등록</button>
     <button class="btn wide" data-act="add">＋ 직접 입력</button>
     <button class="btn wide" data-act="sample">예시 데이터로 둘러보기</button>
@@ -595,16 +595,23 @@ function parseCSV(text) {
   return rows.filter((r) => r.some((x) => x.trim() !== ''));
 }
 
-function importCSV(text) {
-  const rows = parseCSV(text);
-  if (rows.length < 2) { alert('엑셀 파일에 내용이 없어요.'); return; }
+/** 엑셀 양식 CSV → [{who, insurer, ...}] (첫 줄에 보험사·납입액 칸이 없으면 null) */
+function csvRecords(text) {
+  const rows = parseCSV(String(text).trim());
+  if (rows.length < 2) return null;
   const norm = (h) => h.replace(/\s|\(.*?\)/g, '');
   const idx = {};
   rows[0].forEach((h, i) => { const c = CSV_COLS.find(([k, label]) => norm(label) === norm(h) || k === h.trim()); if (c) idx[c[0]] = i; });
-  if (idx.insurer == null || idx.premium == null) { alert('첫 줄에 최소한 ‘보험사, 납입액’ 칸이 있어야 해요. ‘엑셀 입력 양식’을 받아서 써 보세요.'); return; }
+  if (idx.insurer == null || idx.premium == null) return null;
+  return rows.slice(1).map((r) => Object.fromEntries(Object.entries(idx).map(([k, i]) => [k, String(r[i] ?? '').trim()])));
+}
+
+function importCSV(text) {
+  const recs = csvRecords(text);
+  if (!recs) { alert('첫 줄에 최소한 ‘보험사, 납입액’ 칸이 있어야 해요. ‘엑셀 입력 양식’을 받아서 써 보세요.'); return; }
   let added = 0, skipped = 0;
-  for (const r of rows.slice(1)) {
-    const get = (k) => (idx[k] != null ? String(r[idx[k]] ?? '').trim() : '');
+  for (const o of recs) {
+    const get = (k) => o[k] || '';
     const s = ym(get('start')), prem = digits(get('premium'));
     if (!prem || !get('insurer')) { skipped++; continue; }
     let e = ym(get('end'));
@@ -684,168 +691,251 @@ function sample() {
   };
 }
 
-/* ── 사진으로 등록 (Claude API) ──
- * 사진을 Claude가 읽어 보험 목록(JSON)으로 돌려주면, 확인 화면에서 고친 뒤 등록한다.
- * API 키는 이 기기에만 저장하고 백업 파일에는 넣지 않는다. */
-const API_KEY = 'insure.apiKey';
-const MODEL = 'claude-opus-5-5';
+/* ── 사진으로 등록 (무료 · 폰 안에서 글자 인식) ──
+ * 인쇄된 글자(보험 앱 캡처, 보험증권)는 폰 안에서 OCR(tesseract.js)로 읽는다. 사진은 밖으로 나가지 않는다.
+ * 손글씨는 OCR이 못 읽으므로 '글자 붙여넣기'(갤러리 텍스트 추출 · Google 렌즈 · Claude 앱이 만든 표)를 쓴다.
+ * 어느 쪽이든 확인 화면에서 고친 뒤 등록한다. */
+const OCR_JS = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
 const MAX_PHOTOS = 5;
-const getKey = () => { try { return localStorage.getItem(API_KEY) || ''; } catch { return ''; } };
-const setKey = (k) => { try { if (k) localStorage.setItem(API_KEY, k); else localStorage.removeItem(API_KEY); } catch {} };
-
-let Anthropic = null; // SDK는 처음 스캔할 때만 불러온다 (약 300KB)
-async function sdk() {
-  if (!Anthropic) Anthropic = (await import('./vendor/anthropic-sdk-1.1.0.mjs')).default;
-  return Anthropic;
-}
-
-const SCAN_SYSTEM = `너는 한국 가정의 보험 관리 앱에 넣을 데이터를 사진에서 뽑는 도우미야.
-사진은 보험증권, 보험사·토스·뱅크샐러드 같은 앱 화면 캡처, 손으로 적은 보험 표일 수 있어.
-사진에 보이는 서로 다른 보험 계약을 하나도 빠짐없이 policies 배열에 넣어. 보험이 없으면 빈 배열.
-
-규칙
-- 보이지 않는 값은 지어내지 말고 빈 문자열("") 또는 0으로 둬.
-- premium: 한 번 낼 때 금액(원, 정수). 월납이면 월 보험료. 고친 흔적이 있으면 가장 최근 금액을 쓰고 예전 금액은 memo에.
-- cycle: 월납 "M", 연납 "Y".
-- start / end: "YYYY-MM". 연도만 알면 "YYYY". end는 보험료를 마지막으로 내는 달(납입 만료)이야. 보장 만기와 헷갈리지 마.
-- years: "20년납"처럼 납입 기간이 보이면 그 연수.
-- 손으로 그린 표에서 선이 어느 연도 칸에서 끝나면 그 연도가 end야. 연도 위에 나이가 같이 적혀 있어도 end는 연도로.
-- renewable: 실손의료비처럼 갱신형이거나 납입 끝이 정해지지 않은 보험이면 true.
-- paidPct / remainAmount: 화면에 "34.4% 납부", "17,593,480원 남음"처럼 보이면 그 숫자 그대로.
-- cancelled: 줄을 그어 지웠거나 해지·실효로 적힌 보험. 해지 시점이 보이면 cancelMonth("YYYY-MM").
-- payStart / payYears / payAmt: 연금·만기금을 받는 정보. 예: "2036년부터 5년간 지급" → payStart "2036", payYears 5. 종신 지급이면 payYears 0.
-- insured: 피보험자(보장받는 사람)의 이름이나 관계가 보이면.
-- name: 목록에 보일 짧은 이름, 12자 이내. 예: "교보 변액연금", "현대 실손".
-- insurer: 보이는 회사 이름 그대로. 옛 이름(LIG, 동부 등)이면 memo에 지금 이름을 적어도 돼.
-- unsure: 글씨가 흐리거나 숫자를 확실히 못 읽었으면 true.
-- note: 사용자에게 알려 줄 점을 한두 문장으로.
-- 아이디, 비밀번호, 주민등록번호, 계좌·카드 번호 같은 민감한 정보는 어디에도 옮기지 마.`;
-
-const S = (type, extra = {}) => ({ type, ...extra });
-const SCAN_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['policies', 'note'],
-  properties: {
-    note: S('string'),
-    policies: {
-      type: 'array',
-      items: {
-        type: 'object', additionalProperties: false,
-        required: ['insured', 'insurer', 'name', 'product', 'type', 'premium', 'cycle', 'start', 'end', 'years', 'renewable',
-          'paidPct', 'remainAmount', 'cover', 'payStart', 'payYears', 'payAmt', 'cancelled', 'cancelMonth', 'unsure', 'memo'],
-        properties: {
-          insured: S('string'), insurer: S('string'), name: S('string'), product: S('string'),
-          type: S('string', { enum: TYPES }), premium: S('integer'), cycle: S('string', { enum: ['M', 'Y'] }),
-          start: S('string'), end: S('string'), years: S('number'), renewable: S('boolean'),
-          paidPct: S('number'), remainAmount: S('integer'), cover: S('string'),
-          payStart: S('string'), payYears: S('integer'), payAmt: S('integer'),
-          cancelled: S('boolean'), cancelMonth: S('string'), unsure: S('boolean'), memo: S('string'),
-        },
-      },
-    },
-  },
-};
 
 const dlgS = $('#dlgScan');
-let scanRows = [], scanNote = '', scanAbort = null;
+let scanRows = [], scanNote = '', scanText = '', scanRun = null;
 function scanStep(name) { $$('#dlgScan [data-step]').forEach((el) => { el.hidden = el.dataset.step !== name; }); if (!dlgS.open) dlgS.showModal(); }
+function openScan() { if (dlgP.open) dlgP.close(); scanStep('choose'); }
 
-function openScan() {
-  if (dlgP.open) dlgP.close();
-  if (!getKey()) { $('#s-key').value = ''; $('#s-key-err').textContent = ''; scanStep('key'); return; }
-  $('#scanFile').click();
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    if (window.Tesseract) { res(); return; }
+    const el = document.createElement('script');
+    el.src = src; el.async = true;
+    el.onload = () => res();
+    el.onerror = () => { el.remove(); rej(new Error('글자 인식 프로그램을 내려받지 못했어요. 인터넷 연결을 확인해 주세요.')); };
+    document.head.append(el);
+  });
+}
+let ocrWorker = null, ocrStage = ''; // 한 번 만든 인식기는 다시 쓴다
+function getOcr() {
+  if (!ocrWorker) {
+    ocrWorker = loadScript(OCR_JS).then(() => window.Tesseract.createWorker('kor', 1, { logger: ocrLog }));
+    ocrWorker.catch(() => { ocrWorker = null; });
+  }
+  return ocrWorker;
+}
+const OCR_MSG = {
+  'loading tesseract core': '글자 인식 프로그램 받는 중', 'initializing tesseract': '준비 중',
+  'loading language traineddata': '한글 인식 데이터 받는 중 (처음 한 번만)', 'initializing api': '준비 중', 'recognizing text': '글자 읽는 중',
+};
+function ocrLog(m) {
+  const label = OCR_MSG[m.status];
+  if (label && dlgS.open) $('#s-busy-msg').textContent = `${ocrStage}${label}${m.progress ? ` ${Math.round(m.progress * 100)}%` : ''}`;
 }
 
-function saveKey() {
-  const k = $('#s-key').value.trim();
-  if (!/^sk-ant-/.test(k)) { $('#s-key-err').textContent = 'sk-ant- 로 시작하는 키를 붙여넣어 주세요.'; return; }
-  setKey(k);
-  if ($('#dlgSettings').open) renderKeyState();
-  $('#scanFile').click(); // 사용자가 누른 버튼 안에서 바로 사진 고르기
-}
-
-/** 큰 폰 사진을 Claude가 읽는 최대 크기(긴 변 2576px, 3.75MP)로 줄여 JPEG로 */
-async function prepImage(file) {
+/** 사진 → 글자 읽기 좋은 크기의 canvas (긴 변 2400px 이하) + 작은 미리보기 */
+async function prepCanvas(file) {
   let src;
   try { src = await createImageBitmap(file); }
   catch {
     src = await new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => rej(new Error('사진을 열 수 없어요.')); img.src = URL.createObjectURL(file); });
   }
-  const w = src.width, h = src.height;
-  const sc = Math.min(1, 2576 / Math.max(w, h), Math.sqrt(3.75e6 / (w * h)));
-  const cv = document.createElement('canvas');
-  cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
-  cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
-  const url = cv.toDataURL('image/jpeg', 0.88);
-  return { url, data: url.slice(url.indexOf(',') + 1) };
+  const draw = (max) => {
+    const sc = Math.min(1, max / Math.max(src.width, src.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(src.width * sc); cv.height = Math.round(src.height * sc);
+    cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+    return cv;
+  };
+  return { canvas: draw(2400), thumb: draw(160).toDataURL('image/jpeg', 0.7) };
 }
 
-async function runScan(files) {
+async function runOcr(files) {
   files = [...files].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name)).slice(0, MAX_PHOTOS);
   if (!files.length) return;
+  const run = { cancel: false };
+  scanRun = run;
   scanStep('busy');
   $('#s-thumbs').innerHTML = '';
   $('#s-busy-msg').textContent = '사진 준비 중…';
-  const ac = new AbortController();
-  scanAbort = ac;
   try {
-    const imgs = [];
+    const pics = [];
     for (const f of files) {
-      const im = await prepImage(f);
-      imgs.push(im);
-      $('#s-thumbs').insertAdjacentHTML('beforeend', `<img src="${im.url}" alt="">`);
+      const pic = await prepCanvas(f);
+      pics.push(pic);
+      $('#s-thumbs').insertAdjacentHTML('beforeend', `<img src="${pic.thumb}" alt="">`);
     }
-    if (ac.signal.aborted) return;
-    $('#s-busy-msg').textContent = 'AI가 사진을 읽는 중… 보통 20초~1분 걸려요.';
-    const A = await sdk();
-    const client = new A({ apiKey: getKey(), dangerouslyAllowBrowser: true, maxRetries: 1 });
-    const d = new Date();
-    const stream = client.beta.messages.stream({
-      model: MODEL,
-      max_tokens: 16000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default', // 드물게 안전 필터가 거절하면 다른 모델로 자동 재시도
-      output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCAN_SCHEMA } },
-      system: SCAN_SYSTEM,
-      messages: [{
-        role: 'user',
-        content: [
-          ...imgs.map((im) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: im.data } })),
-          { type: 'text', text: `오늘은 ${d.getFullYear()}년 ${d.getMonth() + 1}월이야. 이 사진${imgs.length > 1 ? '들' : ''}에서 보험을 모두 찾아 줘.` },
-        ],
-      }],
-    }, { signal: ac.signal });
-    const msg = await stream.finalMessage();
-    if (msg.stop_reason === 'refusal') throw new Error('이 사진은 읽을 수 없다는 답이 왔어요. 다른 사진으로 해 보세요.');
-    if (msg.stop_reason === 'max_tokens') throw new Error('사진 속 내용이 너무 많아요. 사진을 나눠서 올려 주세요.');
-    const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-    let out;
-    try { out = JSON.parse(text); } catch { throw new Error('결과를 읽지 못했어요. 다시 해 보세요.'); }
-    scanNote = String(out.note || '');
-    scanRows = (Array.isArray(out.policies) ? out.policies : []).map(fromScan);
-    renderScanRows();
-    scanStep('review');
+    const w = await getOcr();
+    let text = '';
+    for (let i = 0; i < pics.length; i++) {
+      if (run.cancel) return;
+      ocrStage = pics.length > 1 ? `사진 ${i + 1}/${pics.length} · ` : '';
+      const { data } = await w.recognize(pics[i].canvas);
+      text += `${data.text}\n\n`;
+    }
+    if (!run.cancel) reviewFromText(text, 'ocr');
   } catch (err) {
-    if (ac.signal.aborted) return;
-    showScanError(err);
-  } finally {
-    if (scanAbort === ac) scanAbort = null;
+    if (!run.cancel) showScanError(err);
   }
 }
 
 function showScanError(err) {
-  const A = Anthropic;
-  let msg = (err && err.message) || '알 수 없는 오류가 났어요.', key = false;
-  if (A) {
-    if (err instanceof A.AuthenticationError) { msg = 'API 키가 맞지 않아요. 키를 다시 넣어 주세요.'; key = true; }
-    else if (err instanceof A.PermissionDeniedError) { msg = '이 API 키로는 쓸 수 없어요. 콘솔에서 키 권한을 확인해 주세요.'; key = true; }
-    else if (err instanceof A.RateLimitError) msg = '요청이 너무 많아요. 1분쯤 뒤에 다시 해 보세요.';
-    else if (err instanceof A.BadRequestError) msg = `요청이 거절됐어요. 크레딧 잔액이 부족하면 콘솔에서 충전해야 해요.\n(${err.message})`;
-    else if (err instanceof A.APIConnectionError) msg = '인터넷 연결을 확인하고 다시 해 보세요.';
-    else if (err instanceof A.APIError) msg = `AI 서버 오류(${err.status ?? '?'})예요. 잠시 뒤 다시 해 보세요.`;
-  }
-  $('#s-error-msg').textContent = msg;
-  $('#s-error-key').hidden = !key;
+  $('#s-error-msg').textContent = (err && err.message) || '알 수 없는 오류가 났어요.';
   scanStep('error');
+}
+
+function reviewFromText(text, source) {
+  scanText = text;
+  const raws = parseText(text);
+  scanRows = raws.map(fromScan);
+  scanNote = !raws.length
+    ? (source === 'ocr'
+      ? '보험을 찾지 못했어요. 손글씨나 흐린 사진은 폰 글자 인식이 잘 못 읽어요. ‘글자 붙여넣기’로 해 보세요.'
+      : '보험을 찾지 못했어요. 보험사 이름과 금액(원)이 들어 있는지 확인해 주세요.')
+    : source === 'ocr' ? '폰에서 글자를 읽은 결과예요. 숫자가 틀리기 쉬우니 꼭 확인해 주세요.' : '';
+  renderScanRows();
+  scanStep('review');
+}
+
+/* ── 읽은 글자 → 보험 목록 ──
+ * 보험 앱 카드(보험사/상품명 → 월 보험료 → ○% 납부 ○원 남음), 보험증권(항목: 값),
+ * 한 줄에 하나씩 적은 표(이름 … 금액 … 끝나는 해), 엑셀 양식 CSV를 모두 받는다. */
+const INSURER_ALIASES = [
+  ['삼성생명', ['삼성생명']], ['삼성화재', ['삼성화재']], ['한화생명', ['한화생명']], ['한화손해보험', ['한화손해', '한화손보']],
+  ['교보생명', ['교보']], ['신한라이프', ['신한라이프', '신한생명', '오렌지라이프']], ['NH농협생명', ['농협생명', 'NH생명', 'NH농협생명']],
+  ['NH농협손해보험', ['농협손해', 'NH손해', 'NH농협손해']], ['동양생명', ['동양생명']], ['미래에셋생명', ['미래에셋']],
+  ['흥국생명', ['흥국생명']], ['흥국화재', ['흥국화재']], ['KB라이프', ['KB라이프', 'KB생명', '푸르덴셜']], ['KDB생명', ['KDB']],
+  ['KB손해보험', ['KB손해', 'KB손보', 'LIG']], ['DB손해보험', ['DB손해', 'DB손보', '동부화재']], ['DB생명', ['DB생명', '동부생명']],
+  ['현대해상', ['현대해상', '하이카']], ['메리츠화재', ['메리츠']], ['롯데손해보험', ['롯데']], ['AIA생명', ['AIA']],
+  ['라이나생명', ['라이나']], ['메트라이프', ['메트라이프', 'METLIFE']], ['ABL생명', ['ABL', '알리안츠']], ['푸본현대생명', ['푸본']],
+  ['처브라이프', ['처브']], ['하나손해보험', ['하나손해', '하나손보']], ['AXA손해보험', ['AXA', '악사']], ['우체국보험', ['우체국']],
+  ['iM라이프', ['IM라이프', 'DGB생명']], ['새마을금고', ['새마을']], ['신협', ['신협']],
+];
+/** 글에서 가장 먼저 나오는 보험사 */
+function findInsurer(t) {
+  const up = String(t).toUpperCase();
+  let best = '', at = Infinity;
+  for (const [name, aliases] of INSURER_ALIASES) for (const a of aliases) { const i = up.indexOf(a.toUpperCase()); if (i >= 0 && i < at) { at = i; best = name; } }
+  return best;
+}
+const TYPE_WORDS = [
+  ['실손', /실손|실비|의료비/], ['암', /암보험|암진단|(^|\s)암(\s|$)|캔서/], ['치아', /치아|덴탈/], ['간병', /간병|치매|요양|케어/],
+  ['운전자', /운전자|운전/], ['어린이', /어린이|자녀|태아|키즈/], ['연금', /연금/], ['저축', /저축|적립/], ['종신', /종신/],
+  ['정기', /정기/], ['화재', /화재보험|주택|재물/], ['자동차', /자동차|다이렉트/], ['건강', /건강|보장|CI|질병|상해|통합|뇌|심장/],
+];
+const guessType = (t) => (TYPE_WORDS.find(([, re]) => re.test(t)) || ['기타'])[0];
+
+/** 줄 안의 금액들. 연도·나이·회차·상품 번호·퍼센트는 뺀다. ok=false 는 쉼표 자리가 이상한 숫자(잘못 읽었을 가능성) */
+function amounts(l) {
+  const out = [];
+  for (const m of l.matchAll(/(\d+(?:\.\d+)?)\s*만\s*원/g)) out.push({ v: Math.round(parseFloat(m[1]) * 10000), ok: true, won: true });
+  for (const m of l.matchAll(/(\d[\d,.]*\d|\d)\s*([원%¢€₩]|세|년|회|건|만)?/g)) {
+    const raw = m[1], tail = m[2] || '', plain = raw.replace(/[,.]/g, ''), v = +plain;
+    if (/[세년회건만]/.test(tail)) continue;
+    const grouped = /^\d{1,3}([,.]\d{3})+$/.test(raw);
+    if (/\./.test(raw) && !grouped) continue;                         // 34.4 같은 소수, 2018.03.15 같은 날짜
+    if (tail === '%' && plain.length <= 3) continue;                   // 진짜 퍼센트
+    const won = tail !== '' && tail !== '%' || (tail === '%' && plain.length > 3); // OCR이 '원'을 %로 읽기도 함
+    if (!won && !/[,]/.test(raw) && plain.length < 5) continue;        // 1704 같은 상품 번호, 2033 같은 연도
+    if (!won && /^(19|20)\d{2}$/.test(plain)) continue;
+    out.push({ v, ok: grouped || /^\d+$/.test(raw), won });
+  }
+  return out;
+}
+
+const LABEL = /^[^가-힣A-Za-z0-9]*(피보험자|계약자|보험\s*기간|보험료|납입|보험금|가입\s*금액|증권|수익자|특약|주계약|청약|계약일|가입일|보장\s*내용|월\s*보험료)/;
+const PROD = /보험|공제|연금|플랜|케어|종신|실손|실비/;
+const TITLE = /^내\s*보험|^\d{1,2}:\d{2}|보험\s*\d+\s*건/;
+const isHead = (l) => !LABEL.test(l) && !/남음|납부/.test(l) && (PROD.test(l) || !!findInsurer(l));
+const DATE = /((?:19|20)\d{2})\s*[.\-/년]\s*(\d{1,2})/g;
+
+function parseText(text) {
+  text = String(text || '').replace(/```[a-z]*/gi, '');
+  const recs = csvRecords(text);
+  if (recs) return recs.map(recToRaw);
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length > 1 && !TITLE.test(l) && /[가-힣\d]/.test(l));
+  const freq = {};
+  for (const l of lines) { const n = findInsurer(l); if (n) freq[n] = (freq[n] || 0) + 1; }
+  const common = (Object.entries(freq).sort((a, b) => b[1] - a[1])[0] || [''])[0]; // 보험사가 안 보이는 카드에 쓴다
+
+  const blocks = [];
+  let cur = null;
+  for (const l of lines) {
+    const amt = amounts(l).filter((a) => a.v <= 10000000);
+    const premLine = /보험료|납입액|납입\s*금액|월납|연납/.test(l) && amt.length > 0;
+    const head = isHead(l);
+    if (head && amt.length && !premLine) { // 한 줄에 이름과 금액이 같이 있는 표
+      blocks.push({ lines: [l], prem: amt[amt.length - 1], inline: true });
+      cur = null;
+      continue;
+    }
+    if (head && (!cur || cur.prem)) { cur = { lines: [] }; blocks.push(cur); }
+    if (!cur) { cur = { lines: [] }; blocks.push(cur); }
+    cur.lines.push(l);
+    if (premLine && !cur.prem) cur.prem = amt.find((a) => a.won) || amt[0];
+  }
+  return blocks.map((b) => blockToRaw(b, common)).filter((r) => r.premium > 0 && (r.insurer || r.product));
+}
+
+function blockToRaw(b, common) {
+  const T = b.lines.join('\n');
+  const insurer = findInsurer(T) || common;
+  const prodLine = b.lines.filter((l) => PROD.test(l) && !LABEL.test(l) && !/남음|납부/.test(l)).sort((x, y) => y.length - x.length)[0] || '';
+  const product = prodLine
+    .replace(/\d[\d,.]*\s*(원|%)?/g, (m) => (b.inline ? ' ' : m))
+    .replace(/[—–_~=·]+|-{2,}/g, ' ')
+    .replace(/^[^가-힣A-Za-z]*(\((보험|저축|연금)\))?[^가-힣A-Za-z]*/, '')
+    .replace(/\s+/g, ' ').trim();
+  const type = guessType(`${product} ${T}`);
+  const remLine = b.lines.find((l) => /남음/.test(l));
+  const rem = remLine ? amounts(remLine).pop() : null;
+  const pct = T.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*납부/);
+  const yrs = T.match(/(\d{1,2})\s*년\s*납/) || T.match(/납입\s*기간\D{0,6}(\d{1,2})\s*년/);
+  let start = '', end = '';
+  for (const l of b.lines) {
+    const ds = [...l.matchAll(DATE)].map((m) => `${m[1]}-${pad(+m[2])}`);
+    if (!ds.length) continue;
+    if (/납입\s*기간/.test(l) && ds.length > 1) { start = start || ds[0]; end = end || ds[ds.length - 1]; }
+    else if (/납입\s*(만기|만료|종료|끝)/.test(l)) end = end || ds[ds.length - 1];
+    else if (/계약일|가입일|계약\s*일자|청약일|납입\s*시작/.test(l)) start = start || ds[0];
+    else if (/보험\s*기간/.test(l)) start = start || ds[0];
+  }
+  if (b.inline && !end) { // 손으로 적은 표: 줄 안의 20xx 중 가장 늦은 해를 끝나는 해로
+    const ys = (T.match(/(?<![\d,.])20[1-9]\d(?![\d,.])/g) || []).map(Number);
+    if (ys.length) end = String(Math.max(...ys));
+  }
+  const cover = (T.match(/(\d{2,3})\s*세\s*(만기|까지|보장)/) || [])[1];
+  const unsure = !!b.inline || !(b.prem && b.prem.ok) || !!(rem && !rem.ok);
+  const short = insurer.replace(/(생명|화재|손해보험|해상|라이프)$/, '');
+  return {
+    insured: (T.match(/피보험자\s*[:：]?\s*([가-힣]{2,4})/) || [])[1] || '',
+    insurer, product, type,
+    name: insurer ? `${short} ${type === '기타' ? '' : type}`.trim() : product.slice(0, 12),
+    premium: b.prem ? b.prem.v : 0, cycle: /연납/.test(T) ? 'Y' : 'M',
+    start, end, years: yrs ? +yrs[1] : 0, renewable: /갱신/.test(T) || type === '실손',
+    paidPct: pct ? +pct[1] : 0, remainAmount: rem ? rem.v : 0,
+    cover: cover ? `${cover}세` : /종신/.test(product) ? '종신' : '',
+    payStart: '', payYears: 0, payAmt: 0, cancelled: /해지|실효/.test(T), cancelMonth: '', unsure, memo: '',
+  };
+}
+
+/** 엑셀 양식 CSV(직접 쓴 것, Claude 앱이 만든 것) 한 줄 → 확인 화면용 */
+function recToRaw(o) {
+  const yrs = parseFloat(o.years) || 0;
+  return {
+    insured: o.who || '', insurer: o.insurer || '', name: o.name || '', product: o.product || '',
+    type: TYPES.includes(o.type) ? o.type : guessType(`${o.type || ''} ${o.product || ''} ${o.name || ''}`),
+    premium: digits(o.premium), cycle: /연/.test(o.cycle || '') ? 'Y' : 'M', start: o.start || '', end: o.end || '', years: yrs,
+    renewable: !o.end && !yrs, paidPct: 0, remainAmount: 0, cover: o.cover || '',
+    payStart: o.payStart || '', payYears: parseInt(o.payYears, 10) || 0, payAmt: digits(o.payAmt),
+    cancelled: !!o.cancel, cancelMonth: o.cancel || '', unsure: false, memo: o.memo || '',
+  };
+}
+
+const CLAUDE_PROMPT = () => `이 사진 속 보험들을 아래 첫 줄 형식의 CSV로만 답해 줘. 첫 줄은 그대로 쓰고 보험 하나당 한 줄, 모르는 칸은 비워 둬. 금액은 숫자만, 날짜는 YYYY-MM (연도만 알면 YYYY). 줄을 그어 지운 보험은 해지월 칸에 '해지'라고 적어 줘. 아이디·비밀번호 같은 개인정보는 적지 마.
+${CSV_COLS.map((c) => c[1]).join(',')}`;
+async function copyPrompt() {
+  const t = CLAUDE_PROMPT();
+  try { await navigator.clipboard.writeText(t); toast('복사했어요. Claude 앱에 사진과 함께 붙여넣고, 받은 표를 여기에 붙여넣으세요.'); }
+  catch { $('#s-text').value = t; $('#s-text').select(); toast('자동 복사가 안 돼서 아래 칸에 넣어 뒀어요. 길게 눌러 복사하세요.'); }
 }
 
 const yearOnly = (v) => /^\s*\d{4}\s*$/.test(v || '');
@@ -872,7 +962,7 @@ function fromScan(r) {
     if (e != null && e - NOW > 80 * 12) { e = null; open = true; warn.push('끝이 너무 멀어서 갱신형으로 넣었어요'); }
   }
   if (yearOnly(r.start) || (!open && yearOnly(r.end))) warn.push('월은 몰라서 추정했어요');
-  if (r.unsure) warn.push('글씨가 흐려서 금액·연도를 꼭 확인해 주세요');
+  if (r.unsure) warn.push('숫자를 확실히 못 읽었어요. 금액·연도를 꼭 확인해 주세요');
 
   const insured = String(r.insured || '').trim();
   const hit = insured && db.members.find((m) => m.name === insured || insured.includes(m.name) || m.name.includes(insured));
@@ -899,6 +989,7 @@ function renderScanRows() {
   $('#s-title').textContent = n ? `찾은 보험 ${n}건` : '보험을 찾지 못했어요';
   $('#s-note').textContent = scanNote;
   $('#s-err').textContent = '';
+  $('#s-raw').textContent = scanText;
   $('#s-rows').innerHTML = scanRows.map((r, i) => `
     <div class="srow${r.on ? '' : ' off'}${r.err ? ' bad' : ''}" data-i="${i}">
       <div class="srow-top">
@@ -966,14 +1057,8 @@ $('#s-rows').addEventListener('input', (e) => {
   if (f === 'name' || f === 'insurer') $('.srow-on b', row).textContent = r.name || r.insurer || '이름 없음';
 });
 $('#s-rows').addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') e.target.dispatchEvent(new Event('input', { bubbles: true })); });
-$('#scanFile').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; runScan(fs); });
-dlgS.addEventListener('close', () => { if (scanAbort) scanAbort.abort(); });
-
-function renderKeyState() {
-  const k = getKey();
-  $('#keyState').textContent = k ? `연결됨 · ${k.slice(0, 10)}…${k.slice(-4)}` : '아직 API 키가 없어요';
-  $('#btnKeyDel').hidden = !k;
-}
+$('#scanFile').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; runOcr(fs); });
+dlgS.addEventListener('close', () => { if (scanRun) scanRun.cancel = true; });
 
 let toastT;
 function toast(text) {
@@ -985,14 +1070,16 @@ function toast(text) {
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
-  settings: () => { renderMembers(); renderKeyState(); $('#dlgSettings').showModal(); },
+  settings: () => { renderMembers(); $('#dlgSettings').showModal(); },
   scan: openScan,
-  saveKey,
   saveScan,
-  scanMore: () => $('#scanFile').click(),
-  cancelScan: () => { if (scanAbort) scanAbort.abort(); dlgS.close(); },
-  editKey: () => { $('#s-key').value = ''; $('#s-key-err').textContent = ''; scanStep('key'); },
-  delKey: () => { if (confirm('이 폰에 저장된 API 키를 지울까요?')) { setKey(''); renderKeyState(); } },
+  scanMore: () => scanStep('choose'),
+  pickPhoto: () => $('#scanFile').click(),
+  pasteMode: () => { $('#s-text').value = ''; scanStep('paste'); },
+  editText: () => { $('#s-text').value = scanText; scanStep('paste'); },
+  parsePaste: () => { const t = $('#s-text').value; if (t.trim()) reviewFromText(t, 'paste'); else toast('글자를 먼저 붙여넣어 주세요.'); },
+  copyPrompt,
+  cancelScan: () => { if (scanRun) scanRun.cancel = true; dlgS.close(); },
   addMember: () => openMember(null),
   deleteMember,
   deletePolicy: () => {
