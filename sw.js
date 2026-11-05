@@ -7,7 +7,7 @@ self.addEventListener('install', (e) => {
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys()
-    .then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    .then((ks) => Promise.all(ks.filter((k) => k.startsWith('shift-') && k !== CACHE).map((k) => caches.delete(k)))) // 같은 사이트의 보험 앱 캐시는 건드리지 않음
     .then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', (e) => {

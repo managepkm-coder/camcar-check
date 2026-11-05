@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0e" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="보험">
+<title>우리집 보험</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon.svg">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<main class="app">
+  <header class="top">
+    <h1>우리집 보험</h1>
+    <button class="icon" data-act="settings" aria-label="설정">⚙</button>
+  </header>
+
+  <nav class="chips" id="chips" aria-label="누구 보험 볼지"></nav>
+  <section id="summary"></section>
+
+  <div class="seg" id="seg" role="tablist">
+    <button role="tab" data-view="timeline">납입기간 한눈에</button>
+    <button role="tab" data-view="list">보험별 상세</button>
+  </div>
+
+  <section id="content"></section>
+  <section id="events"></section>
+  <section id="payouts"></section>
+  <section id="cancelled"></section>
+
+  <p class="foot">데이터는 이 기기에만 저장돼요 · <button class="link" data-act="settings">백업·가족 공유</button></p>
+</main>
+
+<button class="fab" data-act="add">＋ 보험 추가</button>
+
+<!-- 보험 추가/수정 -->
+<dialog id="dlgPolicy" class="sheet">
+<form id="fPolicy" novalidate>
+  <h2 id="pTitle">보험 추가</h2>
+
+  <fieldset>
+    <legend>누구 보험인가요? <small>(보장받는 사람)</small></legend>
+    <div class="pick" id="p-who"></div>
+  </fieldset>
+
+  <div class="grid2">
+    <label>보험사<input id="p-insurer" list="insurerList" autocomplete="off" placeholder="예: 교보생명"></label>
+    <label>종류<select id="p-type"></select></label>
+  </div>
+  <label>보험 이름 <small>짧게 · 비우면 자동</small><input id="p-name" maxlength="20" placeholder="예: 교보 변액연금"></label>
+  <label>정식 상품명 <small>선택</small><input id="p-product" placeholder="증권에 적힌 상품명"></label>
+
+  <div class="grid2">
+    <label>납입액<input id="p-premium" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="p-premium-hint"></small></label>
+    <label>납입 주기<select id="p-cycle"><option value="M">월납</option><option value="Y">연납</option></select></label>
+  </div>
+
+  <div class="grid2">
+    <label>납입 시작 <small>계약월</small><input id="p-start" type="month" placeholder="2018-03"></label>
+    <label>납입 기간<span class="unit"><input id="p-years" type="number" inputmode="decimal" min="0" step="any" placeholder="20">년</span></label>
+  </div>
+  <div class="quick" aria-label="납입 기간 빠른 선택">
+    <button type="button" data-years="5">5년</button><button type="button" data-years="10">10년</button><button type="button" data-years="15">15년</button><button type="button" data-years="20">20년</button><button type="button" data-years="30">30년</button>
+  </div>
+  <div class="grid2">
+    <label>납입 끝 <small>마지막 내는 달</small><input id="p-end" type="month" placeholder="2038-02"></label>
+    <label class="check"><input id="p-open" type="checkbox"><span>갱신형 · 끝 없음<small>실손처럼 계속 내는 보험</small></span></label>
+  </div>
+
+  <details class="helper" id="p-helper">
+    <summary>보험 앱에 ‘○% 납부 · ○원 남음’만 보이나요?</summary>
+    <p class="note">토스·뱅크샐러드·보험사 앱에 나오는 두 숫자를 넣으면 납입 시작과 끝을 계산해 채워 드려요. 위의 납입액을 먼저 넣으세요.</p>
+    <div class="grid2">
+      <label>납부율<span class="unit"><input id="h-pct" inputmode="decimal" placeholder="34.4">%</span></label>
+      <label>남은 금액<input id="h-remain" class="money" inputmode="numeric" placeholder="17,593,480"></label>
+    </div>
+    <button type="button" class="btn" data-act="calcRemain">계산해서 채우기</button>
+    <p class="hint" id="h-out"></p>
+  </details>
+
+  <details class="more" id="p-more">
+    <summary>보장 만기 · 연금 받기 · 해지 · 메모</summary>
+    <div class="grid2">
+      <label>보장 만기<input id="p-cover" placeholder="예: 100세, 종신"></label>
+      <label>이체일<span class="unit"><input id="p-payday" type="number" inputmode="numeric" min="1" max="31" placeholder="25">일</span></label>
+    </div>
+    <p class="sub">연금·만기금을 받는 보험이면</p>
+    <div class="grid3">
+      <label>받기 시작<input id="p-payStart" type="month" placeholder="2036-01"></label>
+      <label>기간<span class="unit"><input id="p-payYears" type="number" inputmode="numeric" min="0" placeholder="종신">년</span></label>
+      <label>월 수령액<input id="p-payAmt" class="money" inputmode="numeric" placeholder="0"></label>
+    </div>
+    <label>해지한 달 <small>넣으면 합계에서 빠지고 아래 ‘해지한 보험’으로 가요</small><input id="p-cancel" type="month" placeholder="2020-01"></label>
+    <label>메모<textarea id="p-memo" rows="2" placeholder="예: 자동이체 할인 -300원, 카드 5% 할인"></textarea></label>
+  </details>
+
+  <p class="err" id="p-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deletePolicy" id="pDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 가족 추가/수정 -->
+<dialog id="dlgMember" class="sheet">
+<form id="fMember" novalidate>
+  <h2 id="mTitle">가족 추가</h2>
+  <label>이름 또는 관계<input id="m-name" maxlength="12" placeholder="예: 아내, 첫째, 엄마"></label>
+  <label>출생 연도 <small>선택 · 타임라인에 나이를 표시해요</small><input id="m-birth" inputmode="numeric" maxlength="4" placeholder="예: 1982"></label>
+  <p class="err" id="m-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deleteMember" id="mDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 설정 -->
+<dialog id="dlgSettings" class="sheet">
+<div class="in">
+  <h2>설정</h2>
+
+  <h3>가족</h3>
+  <div id="memberList"></div>
+  <button class="btn wide" data-act="addMember">＋ 가족 추가</button>
+
+  <h3>백업 · 가족과 같이 보기</h3>
+  <p class="note">데이터는 이 기기에만 저장돼요. 백업 파일을 카톡 등으로 보내고 다른 폰에서 ‘불러오기’를 누르면 같은 화면을 볼 수 있어요.</p>
+  <div class="btns">
+    <button class="btn" data-act="exportJson">백업 파일 저장</button>
+    <button class="btn" data-act="import">불러오기</button>
+  </div>
+  <div class="btns">
+    <button class="btn" data-act="exportCsv">엑셀(CSV)로 저장</button>
+    <button class="btn" data-act="csvTemplate">엑셀 입력 양식</button>
+  </div>
+
+  <h3>보험 목록 자동으로 불러오기?</h3>
+  <p class="note">
+    뱅크샐러드·토스는 금융위원회 <b>마이데이터 허가</b>를 받은 회사만 쓸 수 있는 통로로 보험사 데이터를 받아와요.
+    개인이 만든 앱은 이 통로를 쓸 수 없어서 자동 연동은 안 돼요. 대신
+  </p>
+  <ol class="note">
+    <li><a href="https://www.credit4u.or.kr" target="_blank" rel="noopener">내보험다보여(신용정보원) ↗</a>에서 본인 명의 보험을 한 번에 조회해 옮겨 적기 (가족은 각자 본인인증)</li>
+    <li>보험 앱의 ‘○% 납부 · ○원 남음’ 숫자로 납입기간 계산하기 (보험 추가 화면)</li>
+    <li>엑셀 양식에 한꺼번에 적어서 ‘불러오기’</li>
+  </ol>
+
+  <h3>기타</h3>
+  <div class="btns">
+    <button class="btn" data-act="sample">예시 데이터 보기</button>
+    <button class="btn danger" data-act="wipe">모두 지우기</button>
+  </div>
+  <button class="btn wide" data-close>닫기</button>
+</div>
+</dialog>
+
+<datalist id="insurerList"></datalist>
+<input type="file" id="fileIn" accept=".json,.csv,application/json,text/csv" hidden>
+
+<script src="./app.js"></script>
+</body>
+</html>
