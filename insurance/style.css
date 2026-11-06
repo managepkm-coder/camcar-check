@@ -352,3 +352,13 @@ ol.note li{margin-bottom:4px}
 a.btn{display:flex;text-decoration:none;color:var(--fg);text-align:center}
 a.btn.big{margin-top:8px}
 #a-until-wrap[hidden]{display:none}
+
+/* ── 해지 예정 ── */
+.pol-cplan{margin:-2px 0 10px;font-size:13px;font-weight:600;color:var(--danger)}
+.cplan{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-6px 0 18px;padding:12px 14px;border-radius:14px;
+  border:1.5px solid var(--danger);font-size:14px;color:var(--fg)}
+.cplan b{color:var(--danger)}
+.cplan .btn{flex:none;padding:9px 14px;font-size:14px;background:var(--danger);color:#fff}
+.tl-track i.cx{top:23px;width:3px;height:22px;margin-left:-1.5px;border-radius:2px;background:var(--danger);box-shadow:0 0 0 2px var(--card)}
+.tl-legend i.lg-cx{width:3px;height:12px;border-radius:2px;background:var(--danger)}
+.ev.alm li.cancel b{color:var(--danger)}

@@ -49,6 +49,7 @@
 <form id="fPolicy" novalidate>
   <h2 id="pTitle">보험 추가</h2>
   <div class="pol-amts pstats" id="p-stats" hidden></div>
+  <div class="cplan" id="p-cplan" hidden></div>
   <button type="button" class="btn scanbtn" id="pScan" data-act="scan">📷 사진으로 한 번에 등록<small>보험 앱 캡처 · 보험증권 · 손글씨는 글자 붙여넣기 (무료)</small></button>
 
   <fieldset>
@@ -79,6 +80,7 @@
     <label>납입 끝 <small>마지막 내는 달</small><input id="p-end" type="month" placeholder="2038-02"></label>
     <label class="check"><input id="p-open" type="checkbox"><span>갱신형 · 끝 없음<small>실손처럼 계속 내는 보험</small></span></label>
   </div>
+  <label>해지할 날짜 <small>선택 · 적어 두면 일주일 전과 그날 알려 드려요</small><input id="p-cancelPlan" type="date"></label>
 
   <details class="helper" id="p-helper">
     <summary>보험 앱에 ‘○% 납부 · ○원 남음’만 보이나요?</summary>
@@ -149,9 +151,10 @@
     <label>어느 보험? <small>선택</small><select id="a-policy"></select></label>
     <p class="sub">빠른 선택 <small>(보험을 먼저 고르면 날짜도 채워져요)</small></p>
     <div class="quick">
-      <button type="button" data-preset="pay">보험료 이체일</button><button type="button" data-preset="renew">갱신일</button><button type="button" data-preset="end">납입 끝나는 날</button><button type="button" data-preset="claim">보험금 청구</button><button type="button" data-preset="pension">연금 받기 시작</button>
+      <button type="button" data-preset="cancel">해지할 날</button><button type="button" data-preset="renew">갱신일</button><button type="button" data-preset="end">납입 끝나는 날</button><button type="button" data-preset="claim">보험금 청구</button><button type="button" data-preset="pension">연금 받기 시작</button>
     </div>
-    <label>무슨 알림? <input id="a-title" maxlength="40" placeholder="예: 보험료 이체일, 실손 청구하기"></label>
+    <input type="hidden" id="a-kind">
+    <label>무슨 알림? <input id="a-title" maxlength="40" placeholder="예: 해지하기, 갱신일, 실손 청구하기"></label>
     <div class="grid2">
       <label>날짜<input id="a-date" type="date"></label>
       <label>시각<input id="a-time" type="time" value="09:00"></label>
@@ -171,7 +174,7 @@
   </section>
 
   <section data-astep="cal" hidden>
-    <h2>저장했어요</h2>
+    <h2 id="a-cal-title">저장했어요</h2>
     <p class="note" id="a-saved"></p>
     <div class="howto">
       <b>폰 알림을 받으려면 캘린더에 넣어 주세요</b>

@@ -1,5 +1,5 @@
 /* 오프라인 지원 — 파일을 고치면 CACHE 버전을 올리세요. */
-const CACHE = 'insure-v8';
+const CACHE = 'insure-v9';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
