@@ -362,3 +362,10 @@ a.btn.big{margin-top:8px}
 .tl-track i.cx{top:23px;width:3px;height:22px;margin-left:-1.5px;border-radius:2px;background:var(--danger);box-shadow:0 0 0 2px var(--card)}
 .tl-legend i.lg-cx{width:3px;height:12px;border-radius:2px;background:var(--danger)}
 .ev.alm li.cancel b{color:var(--danger)}
+
+/* ── 다른 사람으로 옮기기 ── */
+.pol .who{cursor:pointer;padding:5px 9px;margin:-2px -6px 0 0;border-radius:999px;border:1px solid var(--line)}
+.pol .who:active,.pol .who:focus-visible{background:var(--line);outline:0}
+.movebtn{margin:-8px 0 16px}
+.mrow.cur{opacity:.55;cursor:default}
+.mrow.cur span{font-weight:700;color:var(--sub)}
