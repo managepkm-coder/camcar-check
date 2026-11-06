@@ -67,6 +67,7 @@ h1{font-size:24px;font-weight:800;margin:0;letter-spacing:-.5px}
 .stats div{background:var(--bg);border-radius:14px;padding:12px}
 .stats small{display:block;font-size:12px;color:var(--sub)}
 .stats b{display:block;font-size:15px;margin-top:3px}
+.stats .claim{grid-column:1/-1;cursor:pointer}
 .stats em{display:block;font-style:normal;font-size:11px;color:var(--mute);margin-top:2px}
 
 /* 보기 전환 */
@@ -94,6 +95,8 @@ h1{font-size:24px;font-weight:800;margin:0;letter-spacing:-.5px}
 .tl-group{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--sub);padding:10px 0 0;position:relative}
 .tl-group i{width:8px;height:8px;border-radius:50%}
 .tl-group>span{margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums}
+.tl-group>span{white-space:nowrap}
+@media (max-width:499px){ .tl-group .gm{display:none} }
 
 .tl-row{width:100%;height:52px;background:none;border:0;padding:0;text-align:left;cursor:pointer;border-radius:8px}
 .tl-row:active,.tl-row:focus-visible{background:var(--line);outline:0}
@@ -129,6 +132,8 @@ h1{font-size:24px;font-weight:800;margin:0;letter-spacing:-.5px}
 .tl-legend span{display:inline-flex;align-items:center;gap:6px}
 .tl-legend i{display:inline-block;width:18px;height:6px;border-radius:3px;background:var(--m0)}
 .tl-legend i.lg-recv{opacity:.3}
+.tl-track i.clm{top:29px;width:9px;height:9px;margin-left:-4.5px;border-radius:2px;transform:rotate(45deg);background:var(--fg);box-shadow:0 0 0 2px var(--card)}
+.tl-legend i.lg-clm{width:8px;height:8px;border-radius:2px;transform:rotate(45deg);background:var(--fg)}
 .tl-legend i.lg-now{width:2px;height:12px;border-radius:0;background:var(--accent)}
 
 @media (max-width:370px){ .tl{--nw:82px;--aw:68px;--gap:6px} .tl-name b{font-size:12.5px} .tl-amt{font-size:12.5px} }
@@ -145,6 +150,7 @@ h1{font-size:24px;font-weight:800;margin:0;letter-spacing:-.5px}
   #content.cards .pol{margin-bottom:0}
   .duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:0 12px;align-items:start;margin-top:12px}
   .duo>section:empty{display:none}
+  .stats{grid-template-columns:repeat(3,minmax(0,1fr))} .stats .claim{grid-column:auto}
 }
 
 /* ── 보험 카드 (앱 캡처처럼) ── */
@@ -309,3 +315,19 @@ ol.note li{margin-bottom:4px}
 .rawtext{margin:4px 0 10px;font-size:13px;color:var(--sub)}
 .rawtext summary{cursor:pointer;padding:6px 0}
 .rawtext pre{white-space:pre-wrap;word-break:break-all;background:var(--bg);border-radius:12px;padding:10px;font-size:12px;max-height:220px;overflow:auto;margin:4px 0 0}
+
+/* ── 받은 보험금 ── */
+.card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.card-h h3,.card-h b{margin:0}
+.card-h .link{font-size:14px;font-weight:600;text-decoration:none}
+.claims-total{display:flex;align-items:baseline;gap:8px;margin:0 0 6px}
+.claims-total b{font-size:22px;font-weight:800;letter-spacing:-.5px}
+.claims-total span{font-size:13px;color:var(--sub)}
+.claims-by{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12.5px;color:var(--sub);margin:0 0 6px}
+.claims-by span{display:inline-flex;align-items:center;gap:5px}
+.claims-by i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.ev.clm li{grid-template-columns:80px minmax(0,1fr) auto}
+.ev.clm .ev-a{color:var(--fg);font-weight:700}
+.pclaims{background:var(--bg);border-radius:14px;padding:12px 12px 4px;margin-bottom:12px}
+.pclaims .card-h b{font-size:14px}
+.pclaims .ev li{padding:8px 0}

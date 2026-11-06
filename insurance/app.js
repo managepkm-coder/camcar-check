@@ -89,9 +89,27 @@ function normalize(d) {
     start: ymStr(ym(p.start)), end: ymStr(ym(p.end)), cover: String(p.cover || ''), payday: +p.payday || null,
     payStart: ymStr(ym(p.payStart)), payYears: +p.payYears || null, payAmt: +p.payAmt || null,
     cancel: ymStr(ym(p.cancel)), memo: String(p.memo || ''),
+    claims: (Array.isArray(p.claims) ? p.claims : []).map((c) => ({
+      id: String((c && c.id) || uid()), date: normDate(c && c.date), amount: Math.round(+(c && c.amount) || 0), memo: String((c && c.memo) || '').slice(0, 30),
+    })).filter((c) => c.date && c.amount > 0),
   }));
   return { members, policies };
 }
+
+/* 받은 보험금: 보험마다 claims: [{ id, date: 'YYYY-MM-DD', amount, memo }] */
+const claimsOf = (p) => p.claims || [];
+const sumClaims = (ps) => ps.reduce((a, p) => a + claimsOf(p).reduce((b, c) => b + c.amount, 0), 0);
+const countClaims = (ps) => ps.reduce((a, p) => a + claimsOf(p).length, 0);
+/** '2024-03-15', '2024.3.15', '2024-03' → 'YYYY-MM-DD' (못 읽으면 '') */
+function normDate(v) {
+  const m = String(v || '').trim().match(/^(\d{4})\D*(\d{1,2})(?:\D*(\d{1,2}))?/);
+  if (!m || +m[2] < 1 || +m[2] > 12) return '';
+  const d = Math.min(Math.max(+(m[3] || 1), 1), 31);
+  return `${m[1]}-${pad(+m[2])}-${pad(d)}`;
+}
+const dateDot = (d) => d.replace(/-/g, '.');
+const dateIdx = (d) => { const [y, mo, da] = d.split('-').map(Number); return y * 12 + mo - 1 + (da - 1) / 31; };
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
 const member = (id) => db.members.find((m) => m.id === id) || db.members[0];
 const ageAt = (m, i) => (m && m.birth ? Math.floor(i / 12) - m.birth : null);
@@ -164,6 +182,7 @@ function render() {
     : timelineHTML(live);
   $('#events').innerHTML = empty ? '' : eventsHTML(live);
   $('#payouts').innerHTML = empty ? '' : payoutsHTML(live);
+  $('#claims').innerHTML = empty ? '' : claimsHTML(list);
   $('#cancelled').innerHTML = gone.length
     ? `<details class="gone"><summary>해지한 보험 ${gone.length}건 <small>지금까지 ${won(gone.reduce((a, p) => a + calc(p).paidAmt, 0))}원 냄</small></summary>${gone.map(cardHTML).join('')}</details>`
     : '';
@@ -220,6 +239,8 @@ function summaryHTML(list) {
     <div class="stats">
       <div><small>납부한 금액</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
       <div><small>남은 납부액</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
+      <div class="claim" data-act="addClaim" role="button" tabindex="0"><small>받은 보험금</small><b>${manwon(sumClaims(list))}</b>
+        <em>${countClaims(list) ? `${countClaims(list)}건${paid ? ` · 납부한 금액의 ${Math.round((sumClaims(list) / paid) * 100)}%` : ''}` : '아직 기록 없음 · 눌러서 기록'}</em></div>
     </div>
   </div>`;
 }
@@ -258,13 +279,13 @@ function timelineHTML(list) {
 
   const remainOf = (list) => list.reduce((a, r) => a + (r.k.status !== 'done' && r.k.remainAmt != null ? r.k.remainAmt : 0), 0);
   const paidOf = (list) => list.reduce((a, r) => a + r.k.paidAmt, 0);
-  let body = '', last = null, total = 0;
+  let body = '', last = null, total = 0, nClm = 0;
   for (const { p, k, m } of rows) {
     if (multi && m !== last) {
       last = m;
       const mine = rows.filter((r) => r.m === m);
       const sum = mine.filter((r) => r.k.status === 'paying').reduce((a, r) => a + r.k.monthly, 0);
-      body += `<div class="tl-group"><i style="background:var(--m${m.slot})"></i>${esc(m.name)}<span>월 ${won(sum)} · 납부 ${money2(paidOf(mine))} · 남은 ${money2(remainOf(mine))}</span></div>`;
+      body += `<div class="tl-group"><i style="background:var(--m${m.slot})"></i>${esc(m.name)}<span><span class="gm">월 ${won(sum)} · </span>납부 ${money2(paidOf(mine))} · 남은 ${money2(remainOf(mine))}</span></div>`;
     }
     if (k.status === 'paying') total += k.monthly;
     const open = k.e == null;
@@ -280,6 +301,11 @@ function timelineHTML(list) {
       marks += `<i class="recv${pe >= d1 ? ' open' : ''}" style="left:${pc(X(ps))};width:${pc(Math.max(X(pe) - X(ps), 0.6))}"></i>`;
       tip += ` · ${ymDot(ps)}부터 ${p.payYears ? `${p.payYears}년간` : '평생'} 받음`;
     }
+    for (const c of claimsOf(p)) { // 보험금 받은 날 ◆
+      const ci = dateIdx(c.date);
+      if (ci >= d0 && ci <= d1) { marks += `<i class="clm" style="left:${pc(X(ci))}"></i>`; nClm++; }
+    }
+    if (claimsOf(p).length) tip += ` · 받은 보험금 ${won(sumClaims([p]))}원`;
     const age = ageAt(focus, open ? NOW : k.e);
     const lbl = open ? '갱신형 · 계속' : k.status === 'done' ? `${Math.floor(k.e / 12)} 완납` : `${Math.floor(k.e / 12)}${age != null ? ` · ${age}세` : ''}`;
     const lx = open ? x0 : x1;
@@ -302,7 +328,7 @@ function timelineHTML(list) {
     ${body}
     <div class="tl-foot"><span>합계</span><span class="tl-track"><em style="left:${pc(X(today))}">오늘</em></span><span class="tl-amt"><b>${won(total)}</b><small>납부 ${money2(paidOf(rows))}</small><small>남은 ${money2(remainOf(rows))}</small></span></div>
   </div>
-  <p class="tl-legend"><span><i class="lg-bar"></i>내는 기간</span><span><i class="lg-recv"></i>받는 기간</span><span><i class="lg-now"></i>오늘</span>${focus.birth ? `<span>나이: ${esc(focus.name)} 기준</span>` : ''}${hidden ? `<span>예전에 다 낸 ${hidden}건은 ‘보험별 상세’에</span>` : ''}</p>
+  <p class="tl-legend"><span><i class="lg-bar"></i>내는 기간</span><span><i class="lg-recv"></i>받는 기간</span><span><i class="lg-now"></i>오늘</span>${nClm ? '<span><i class="lg-clm"></i>보험금 받은 날</span>' : ''}${focus.birth ? `<span>나이: ${esc(focus.name)} 기준</span>` : ''}${hidden ? `<span>예전에 다 낸 ${hidden}건은 ‘보험별 상세’에</span>` : ''}</p>
   </div>`;
 }
 
@@ -350,7 +376,7 @@ function cardHTML(p) {
     <div class="pol-period"><span>${period}</span><span>${when}</span></div>
     ${meter}
     <div class="pol-foot">${foot}</div>
-    <div class="pol-amts">${amts}</div>
+    <div class="pol-amts">${amts}${claimsOf(p).length ? box('받은 보험금', `${won(sumClaims([p]))}원 · ${claimsOf(p).length}건`) : ''}</div>
     ${recv}
     ${p.memo ? `<div class="pol-memo">${esc(p.memo)}</div>` : ''}
   </article>`;
@@ -387,6 +413,25 @@ function eventsHTML(list) {
     <div class="ev-h"><span>언제부터</span><span></span><span>변화</span><span>월 보험료</span></div>
     <ol class="ev">${rows}</ol></div>`;
 }
+
+/** 받은 보험금 카드: 합계, 사람별, 최근 순 목록 */
+function claimsHTML(list) {
+  const rows = list.flatMap((p) => claimsOf(p).map((c) => ({ p, c }))).sort((a, b) => b.c.date.localeCompare(a.c.date));
+  const total = rows.reduce((a, r) => a + r.c.amount, 0);
+  const multi = ui.who === 'all' && db.members.length > 1;
+  const byWho = multi ? db.members.map((m) => ({ m, s: rows.filter((r) => r.p.who === m.id).reduce((a, r) => a + r.c.amount, 0) })).filter((x) => x.s) : [];
+  return `<div class="card">
+    <div class="card-h"><h3>받은 보험금</h3><button type="button" class="link" data-act="addClaim">＋ 기록하기</button></div>
+    ${rows.length ? `<p class="claims-total"><b>${won(total)}원</b><span>${rows.length}건</span></p>
+      ${byWho.length > 1 ? `<p class="claims-by">${byWho.map((x) => `<span style="--c:var(--m${x.m.slot})"><i></i>${esc(x.m.name)} ${won(x.s)}원</span>`).join('')}</p>` : ''}
+      <ol class="ev clm">${rows.map(({ p, c }) => claimRow(p, c, multi)).join('')}</ol>`
+    : '<p class="note">병원비·진단금 등 보험사에서 받은 돈을 기록하면 여기에 모여요.</p>'}
+  </div>`;
+}
+const claimRow = (p, c, multi, inPolicy = false) => `<li data-claim="${c.id}" role="button" tabindex="0">
+  <span class="ev-t">${dateDot(c.date)}</span>
+  <span class="ev-n"><b>${esc(c.memo || '보험금')}</b>${inPolicy ? '' : `<small>${esc(p.name)}${multi ? ` · ${esc(member(p.who).name)}` : ''}</small>`}</span>
+  <span class="ev-a">${won(c.amount)}원</span></li>`;
 
 function payoutsHTML(list) {
   const rows = list.filter((p) => ym(p.payStart) != null).sort((a, b) => ym(a.payStart) - ym(b.payStart));
@@ -438,10 +483,64 @@ function openPolicy(id) {
   $('#p-helper').open = false;
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
+  renderPolicyClaims();
   $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
   fromEnd(); syncOpen(); premiumHint();
   dlgP.showModal();
+}
+
+function renderPolicyClaims() {
+  const el = $('#p-claims');
+  el.hidden = !editing;
+  if (!editing) return;
+  const cs = claimsOf(editing).slice().sort((a, b) => b.date.localeCompare(a.date));
+  el.innerHTML = `<div class="card-h"><b>받은 보험금${cs.length ? ` · ${won(sumClaims([editing]))}원` : ''}</b>
+    <button type="button" class="link" data-act="addClaimHere">＋ 추가</button></div>
+    ${cs.length ? `<ol class="ev clm">${cs.map((c) => claimRow(editing, c, false, true)).join('')}</ol>` : '<p class="sub">아직 기록이 없어요.</p>'}`;
+}
+
+/* ── 받은 보험금 기록 ── */
+let editingClaim = null; // { p, c }
+const dlgC = $('#dlgClaim');
+function openClaim(cid, pid) {
+  if (!db.policies.length) { toast('먼저 보험을 추가해 주세요.'); return; }
+  editingClaim = null;
+  if (cid) for (const p of db.policies) { const c = claimsOf(p).find((x) => x.id === cid); if (c) { editingClaim = { p, c }; break; } }
+  const c = editingClaim && editingClaim.c;
+  const sel = editingClaim ? editingClaim.p.id
+    : pid || (db.policies.find((p) => ui.who === 'all' || p.who === ui.who) || db.policies[0]).id;
+  $('#c-policy').innerHTML = db.members.map((m) => {
+    const ps = db.policies.filter((p) => p.who === m.id);
+    return ps.length ? `<optgroup label="${esc(m.name)}">${ps.map((p) => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${esc(p.name)}${p.insurer ? ` · ${esc(p.insurer)}` : ''}${calc(p).status === 'cancelled' ? ' (해지)' : ''}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  $('#cTitle').textContent = c ? '받은 보험금 수정' : '받은 보험금 기록';
+  $('#c-date').value = c ? c.date : todayStr();
+  $('#c-amount').value = c ? won(c.amount) : '';
+  $('#c-amount-hint').textContent = c && c.amount >= 10000 ? manwon(c.amount) : '';
+  $('#c-memo').value = c ? c.memo : '';
+  $('#cDel').hidden = !c;
+  $('#c-err').textContent = '';
+  dlgC.showModal();
+}
+$('#fClaim').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const p = db.policies.find((x) => x.id === $('#c-policy').value);
+  const amount = digits($('#c-amount').value), date = normDate($('#c-date').value);
+  const err = !p ? '어느 보험인지 골라 주세요.' : !date ? '받은 날을 넣어 주세요.' : !amount ? '받은 금액을 넣어 주세요.' : '';
+  if (err) { $('#c-err').textContent = err; return; }
+  const rec = { id: editingClaim ? editingClaim.c.id : uid(), date, amount, memo: $('#c-memo').value.trim().slice(0, 30) };
+  if (editingClaim) editingClaim.p.claims = claimsOf(editingClaim.p).filter((x) => x !== editingClaim.c);
+  p.claims = [...claimsOf(p), rec];
+  save(); dlgC.close(); render(); persist();
+  if (dlgP.open) renderPolicyClaims();
+  toast(`${editingClaim ? '고쳤어요' : '기록했어요'} · ${p.name} ${won(amount)}원`);
+});
+function deleteClaim() {
+  if (!editingClaim || !confirm('이 보험금 기록을 지울까요?')) return;
+  editingClaim.p.claims = claimsOf(editingClaim.p).filter((x) => x !== editingClaim.c);
+  save(); dlgC.close(); render();
+  if (dlgP.open) renderPolicyClaims();
 }
 
 function fromYears() {
@@ -697,14 +796,15 @@ function sample() {
       P(me, '교보생명', '교보 변액연금', '연금', 100000, '2016-09', '2028-09', { payStart: '2047-01', payYears: 10, payAmt: 300000 }),
       P(me, '메리츠화재', '메리츠 암보험', '암', 35000, '2013-05', '2033-04', { cover: '100세' }),
       P(me, '동양생명', '동양 종신', '종신', 29700, '2007-08', '2027-07', { cover: '종신', memo: '자동이체 할인 -300원' }),
-      P(me, '현대해상', '현대 실손', '실손', 38500, '2017-04', ''),
+      P(me, '현대해상', '현대 실손', '실손', 38500, '2017-04', '', { claims: [
+        { id: uid(), date: '2025-08-12', amount: 132000, memo: '실손 병원비' }, { id: uid(), date: '2026-03-03', amount: 48500, memo: '통원' }] }),
       P(me, 'DB손해보험', 'DB 운전자', '운전자', 12800, '2021-02', '2041-01'),
       P(me, 'NH농협생명', '농협 정기', '정기', 45000, '2009-01', '2018-12'),
       P(me, '삼성생명', '삼성 저축', '저축', 150000, '2015-01', '2025-12', { cancel: '2020-02' }),
-      P(sp, '삼성화재', '삼성 건강', '건강', 68800, '2015-06', '2035-05', { cover: '100세' }),
+      P(sp, '삼성화재', '삼성 건강', '건강', 68800, '2015-06', '2035-05', { cover: '100세', claims: [{ id: uid(), date: '2024-06-02', amount: 1000000, memo: '수술비' }] }),
       P(sp, 'KB손해보험', 'KB 실손', '실손', 24300, '2019-10', ''),
       P(sp, '롯데손해보험', '롯데 간병', '간병', 50000, '2023-01', '2032-12'),
-      P(kid, '현대해상', '현대 어린이', '어린이', 57650, '2016-05', '2046-04', { cover: '100세', memo: '카드 5% 할인' }),
+      P(kid, '현대해상', '현대 어린이', '어린이', 57650, '2016-05', '2046-04', { cover: '100세', memo: '카드 5% 할인', claims: [{ id: uid(), date: '2025-11-20', amount: 300000, memo: '입원비' }] }),
       P(kid, '흥국화재', '흥국 치아', '치아', 18900, '2024-03', '2034-02'),
     ],
   };
@@ -1100,6 +1200,9 @@ const actions = {
   copyPrompt,
   cancelScan: () => { if (scanRun) scanRun.cancel = true; dlgS.close(); },
   addMember: () => openMember(null),
+  addClaim: () => openClaim(null, null),
+  addClaimHere: () => { if (editing) openClaim(null, editing.id); },
+  deleteClaim,
   deleteMember,
   deletePolicy: () => {
     if (!editing || !confirm(`‘${editing.name}’을(를) 지울까요?`)) return;
@@ -1127,18 +1230,20 @@ const actions = {
 };
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years]');
+  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo]');
   if (!t) return;
   if (t.hasAttribute('data-close')) { t.closest('dialog').close(); return; }
   if (t.dataset.who) { ui.who = t.dataset.who; saveUI(); render(); return; }
   if (t.dataset.view) { ui.view = t.dataset.view; saveUI(); render(); return; }
   if (t.dataset.years) { $('#p-years').value = t.dataset.years; fromYears(); return; }
   if (t.dataset.member) { openMember(t.dataset.member); return; }
+  if (t.dataset.claim) { openClaim(t.dataset.claim); return; }
+  if (t.dataset.memo) { $('#c-memo').value = t.dataset.memo; return; }
   if (t.dataset.act) { actions[t.dataset.act](t); return; }
   if (t.dataset.id) openPolicy(t.dataset.id);
 });
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-id]')) { e.preventDefault(); e.target.click(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-id],[role=button][data-claim],[role=button][data-act]')) { e.preventDefault(); e.target.click(); }
 });
 // 시트 바깥(어두운 부분)을 누르면 닫기
 $$('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));
@@ -1146,6 +1251,7 @@ $$('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target ==
 $$('input.money').forEach((el) => el.addEventListener('input', () => {
   const n = digits(el.value); el.value = n ? won(n) : '';
   if (el.id === 'p-premium') premiumHint();
+  if (el.id === 'c-amount') $('#c-amount-hint').textContent = n >= 10000 ? manwon(n) : '';
 }));
 $('#p-years').addEventListener('input', fromYears);
 $('#p-end').addEventListener('change', fromEnd);

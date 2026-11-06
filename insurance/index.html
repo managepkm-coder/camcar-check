@@ -31,6 +31,7 @@
 
   <section id="content"></section>
   <div class="duo">
+    <section id="claims"></section>
     <section id="events"></section>
     <section id="payouts"></section>
   </div>
@@ -103,9 +104,33 @@
     <label>메모<textarea id="p-memo" rows="2" placeholder="예: 자동이체 할인 -300원, 카드 5% 할인"></textarea></label>
   </details>
 
+  <div class="pclaims" id="p-claims" hidden></div>
+
   <p class="err" id="p-err" role="alert"></p>
   <div class="actions">
     <button type="button" class="btn danger" data-act="deletePolicy" id="pDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 받은 보험금 기록 -->
+<dialog id="dlgClaim" class="sheet">
+<form id="fClaim" novalidate>
+  <h2 id="cTitle">받은 보험금 기록</h2>
+  <label>어느 보험에서 받았나요?<select id="c-policy"></select></label>
+  <div class="grid2">
+    <label>받은 날<input id="c-date" type="date"></label>
+    <label>받은 금액<input id="c-amount" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="c-amount-hint"></small></label>
+  </div>
+  <label>내용 <small>선택</small><input id="c-memo" maxlength="30" placeholder="예: 실손 병원비, 입원비, 암 진단금"></label>
+  <div class="quick" aria-label="내용 빠른 선택">
+    <button type="button" data-memo="실손 병원비">실손 병원비</button><button type="button" data-memo="통원">통원</button><button type="button" data-memo="입원비">입원비</button><button type="button" data-memo="수술비">수술비</button><button type="button" data-memo="진단금">진단금</button><button type="button" data-memo="만기·해지 환급금">환급금</button>
+  </div>
+  <p class="err" id="c-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deleteClaim" id="cDel">삭제</button>
     <button type="button" class="btn" data-close>취소</button>
     <button type="submit" class="btn primary">저장</button>
   </div>
