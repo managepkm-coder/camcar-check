@@ -37,6 +37,17 @@ function ym(s) {
   const mo = m[2] ? +m[2] : 1;
   return mo >= 1 && mo <= 12 ? +m[1] * 12 + mo - 1 : null;
 }
+/** 납입 시작: 'YYYY-MM-DD'(일자까지) 또는 'YYYY-MM'(예전 데이터) 로 맞춘다 */
+function normYmd(v) {
+  const m = String(v || '').trim().match(/^(\d{4})(?:\D*(\d{1,2}))?(?:\D*(\d{1,2}))?/);
+  if (!m) return '';
+  const mo = m[2] ? +m[2] : 1;
+  if (mo < 1 || mo > 12) return '';
+  return m[3] ? `${m[1]}-${pad(mo)}-${pad(Math.min(Math.max(+m[3], 1), 31))}` : `${m[1]}-${pad(mo)}`;
+}
+const dayOf = (v) => { const n = normYmd(v); return n.length === 10 ? +n.slice(8) : null; };
+const startDot = (v) => normYmd(v).replace(/-/g, '.');
+const toDateInput = (v) => { const n = normYmd(v); return n.length === 7 ? `${n}-01` : n; };
 const ymStr = (i) => (i == null ? '' : `${Math.floor(i / 12)}-${pad((i % 12) + 1)}`);
 const ymDot = (i) => `${Math.floor(i / 12)}.${pad((i % 12) + 1)}`;
 const nowIdx = () => { const d = new Date(); return d.getFullYear() * 12 + d.getMonth(); };
@@ -86,7 +97,7 @@ function normalize(d) {
     who: ids.has(p.who) ? p.who : members[0].id,
     insurer: String(p.insurer || ''), name: String(p.name || p.insurer || '보험'), product: String(p.product || ''),
     type: String(p.type || '기타'), premium: +p.premium || 0, cycle: p.cycle === 'Y' ? 'Y' : 'M',
-    start: ymStr(ym(p.start)), end: ymStr(ym(p.end)), cover: String(p.cover || ''), payday: +p.payday || null,
+    start: normYmd(p.start), end: ymStr(ym(p.end)), cover: String(p.cover || ''), payday: +p.payday || null,
     payStart: ymStr(ym(p.payStart)), payYears: +p.payYears || null, payAmt: +p.payAmt || null,
     cancel: ymStr(ym(p.cancel)), memo: String(p.memo || ''),
     claims: (Array.isArray(p.claims) ? p.claims : []).map((c) => ({
@@ -133,20 +144,24 @@ function compute(p) {
   else if (s != null && NOW < s) status = 'before';
   else if (e != null && NOW > e) status = 'done';
 
+  // 이번 달 보험료가 이미 나갔는지: 이체일(없으면 납입 시작 일자, 그것도 없으면 1일)이 지났으면 낸 것으로 본다
+  const payDay = +p.payday || dayOf(p.start) || 1;
+  const thru = new Date().getDate() >= payDay ? NOW : NOW - 1;
   let totalN = Infinity, paidN = null, remainN;
   if (s != null) {
     totalN = e != null ? Math.max(0, Math.floor((e - s) / per) + 1) : Infinity;
-    paidN = Math.max(0, Math.min(totalN, Math.floor((Math.min(NOW, e ?? NOW) - s) / per) + 1));
+    paidN = Math.max(0, Math.min(totalN, Math.floor((Math.min(thru, e ?? thru) - s) / per) + 1));
     remainN = totalN - paidN;
   } else {
     // 시작 월을 모르면 낸 횟수는 모르고, 남은 횟수만 끝 월로 계산한다
-    remainN = e != null ? Math.max(0, Math.floor((e - NOW) / per)) : Infinity;
+    remainN = e != null ? Math.max(0, Math.floor((e - thru) / per)) : Infinity;
   }
   if (status === 'cancelled') remainN = 0;
   return {
     s, e, c, per, status, totalN, paidN, remainN,
     monthly: p.premium / per, // 연납은 월로 환산
     paidAmt: (paidN ?? 0) * p.premium,
+    totalAmt: Number.isFinite(totalN) ? totalN * p.premium : null, // 계약 전체에 낼 돈
     remainAmt: Number.isFinite(remainN) ? remainN * p.premium : null,
     pct: paidN != null && Number.isFinite(totalN) && totalN > 0 ? paidN / totalN : null,
     left: e != null ? Math.max(0, e - NOW) : null, // 이번 달 다음부터 남은 개월
@@ -295,7 +310,7 @@ function timelineHTML(list) {
     if (!open) marks += `<i class="dot${k.status === 'done' ? ' done' : ''}" style="left:${pc(x1)}"></i>`;
 
     const ps = ym(p.payStart);
-    let tip = `${p.name} · ${k.s != null ? ymDot(k.s) : '시작 모름'} ~ ${open ? '계속' : ymDot(k.e)} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원`;
+    let tip = `${p.name} · ${k.s != null ? startDot(p.start) : '시작 모름'} ~ ${open ? '계속' : ymDot(k.e)} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원`;
     if (ps != null) {
       const pe = p.payYears ? ps + p.payYears * 12 : d1;
       marks += `<i class="recv${pe >= d1 ? ' open' : ''}" style="left:${pc(X(ps))};width:${pc(Math.max(X(pe) - X(ps), 0.6))}"></i>`;
@@ -332,35 +347,45 @@ function timelineHTML(list) {
   </div>`;
 }
 
+/** 보험 하나의 금액 칸들: 총 납부할 금액 · 납부한 금액 · 남은 납부액 (+ 받은 보험금) */
+function amountBoxes(p, k) {
+  const box = (label, val, cls = '') => `<div${cls ? ` class="${cls}"` : ''}><small>${label}</small><b>${val}</b></div>`;
+  const paid = k.paidN != null ? `${won(k.paidAmt)}원` : '시작 월 모름';
+  let h = '';
+  if (k.status === 'cancelled') h = box('납부한 금액', paid);
+  else if (k.status === 'done') h = box('총 납부한 금액', paid);
+  else {
+    h = (k.e == null ? '' : box('총 납부할 금액', k.totalAmt != null ? `${won(k.totalAmt)}원` : '시작 월 모름'))
+      + box('납부한 금액', paid)
+      + box('남은 납부액', k.remainAmt != null ? `${won(k.remainAmt)}원` : '갱신형', 'rem');
+  }
+  if (claimsOf(p).length) h += box('받은 보험금', `${won(sumClaims([p]))}원 · ${claimsOf(p).length}건`, 'clm');
+  return h;
+}
+
 function cardHTML(p) {
   const k = calc(p), m = member(p.who);
   const ageEnd = k.e != null ? ageAt(m, k.e) : null;
   const pl = payLabel(k);
-  const period = `${k.s != null ? ymDot(k.s) : '시작 ?'} ~ ${k.e != null ? ymDot(k.e) + (ageEnd != null ? `(${ageEnd}세)` : '') : '계속'}${pl ? ` · ${pl}` : ''}`;
+  const period = `${k.s != null ? startDot(p.start) : '시작 ?'} ~ ${k.e != null ? ymDot(k.e) + (ageEnd != null ? `(${ageEnd}세)` : '') : '계속'}${pl ? ` · ${pl}` : ''}`;
   const when = k.status === 'paying' ? (k.left != null ? (k.left ? `완납까지 ${dur(k.left)}` : '이번 달이 마지막') : '')
-    : k.status === 'before' ? `${ymDot(k.s)} 시작` : '';
+    : k.status === 'before' ? `${startDot(p.start)} 시작` : '';
 
-  // 납부율 막대 + 아래 두 칸(납부한 금액 / 남은 납부액)
+  // 납부율 막대 + 아래 칸들(총 납부할 금액 / 납부한 금액 / 남은 납부액)
   let meter = '', foot;
-  const box = (label, val) => `<div><small>${label}</small><b>${val}</b></div>`;
-  const paidBox = box('납부한 금액', k.paidN != null ? `${won(k.paidAmt)}원` : '시작 월 모름');
-  let amts = paidBox;
   if (k.status === 'cancelled') {
     foot = `<span>해지 ${ymDot(k.c)}</span><span></span>`;
   } else if (k.e == null) {
     foot = `<span>계속 납입${k.paidN != null ? ` · ${k.paidN}회째` : ''}</span><span></span>`;
-    amts += box('남은 납부액', '갱신형');
   } else if (k.status === 'done') {
     if (k.pct != null) meter = '<div class="meter done"><i style="width:100%"></i></div>';
     foot = `<span class="ok">✓ 납입완료</span><span>${k.paidN != null ? `${k.paidN}회 냄` : ''}</span>`;
-  } else {
-    if (k.pct != null) {
-      const pct = k.pct * 100;
-      meter = `<div class="meter"><i style="width:${pct.toFixed(1)}%"></i></div>`;
-      foot = `<span>${pct.toFixed(1)}% 납부 · ${k.paidN}/${k.totalN}회</span><span>남은 ${k.remainN}회</span>`;
-    } else foot = `<span>남은 ${k.remainN}회</span><span></span>`;
-    amts += box('남은 납부액', `${won(k.remainAmt)}원`);
-  }
+  } else if (k.pct != null) {
+    const pct = k.pct * 100;
+    meter = `<div class="meter"><i style="width:${pct.toFixed(1)}%"></i></div>`;
+    foot = `<span>${pct.toFixed(1)}% 납부 · ${k.paidN}/${k.totalN}회</span><span>남은 ${k.remainN}회</span>`;
+  } else foot = `<span>남은 ${k.remainN}회</span><span></span>`;
+  const amts = amountBoxes(p, k);
   const ps = ym(p.payStart);
   const recv = ps != null
     ? `<div class="pol-recv">받을 돈 · ${ymDot(ps)}부터 ${p.payYears ? `${p.payYears}년간` : '평생'}${p.payAmt ? ` 월 ${won(p.payAmt)}원` : ''}${ageAt(m, ps) != null ? ` (${ageAt(m, ps)}세)` : ''}</div>` : '';
@@ -376,7 +401,7 @@ function cardHTML(p) {
     <div class="pol-period"><span>${period}</span><span>${when}</span></div>
     ${meter}
     <div class="pol-foot">${foot}</div>
-    <div class="pol-amts">${amts}${claimsOf(p).length ? box('받은 보험금', `${won(sumClaims([p]))}원 · ${claimsOf(p).length}건`) : ''}</div>
+    <div class="pol-amts">${amts}</div>
     ${recv}
     ${p.memo ? `<div class="pol-memo">${esc(p.memo)}</div>` : ''}
   </article>`;
@@ -475,7 +500,7 @@ function openPolicy(id) {
   const set = (f, v) => { $(`#p-${f}`).value = v ?? ''; };
   set('insurer', p.insurer); set('type', p.type); set('name', p.name); set('product', p.product);
   set('premium', p.premium ? won(p.premium) : ''); set('cycle', p.cycle);
-  set('start', p.start); set('end', p.end); set('years', '');
+  set('start', toDateInput(p.start)); set('end', p.end); set('years', '');
   set('cover', p.cover); set('payday', p.payday); set('payStart', p.payStart); set('payYears', p.payYears);
   set('payAmt', p.payAmt ? won(p.payAmt) : ''); set('cancel', p.cancel); set('memo', p.memo);
   $('#p-open').checked = !!editing && !p.end;
@@ -483,6 +508,8 @@ function openPolicy(id) {
   $('#p-helper').open = false;
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
+  $('#p-stats').hidden = !editing;
+  if (editing) { const k = calc(editing); $('#p-stats').innerHTML = amountBoxes(editing, k); }
   renderPolicyClaims();
   $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
@@ -585,7 +612,7 @@ function calcRemain() {
     const total = totalFrom(left, pct, per);
     const paid = total - left;
     const start = NOW - (paid - 1) * per;
-    $('#p-start').value = ymStr(start);
+    $('#p-start').value = `${ymStr(start)}-${pad(Math.min(+$('#p-payday').value || 1, 28))}`;
     out.textContent = `→ ${ymDot(start)} ~ ${ymDot(end)} · 총 ${total}회 중 ${paid}회 냄. 보험증권과 다르면 고쳐 주세요.`;
   } else {
     out.textContent = `→ 납입 끝 ${ymDot(end)} (남은 ${left}회). 납입 시작 월은 직접 넣어 주세요.`;
@@ -611,7 +638,7 @@ $('#fPolicy').addEventListener('submit', (e) => {
     who: ($('input[name=who]:checked') || {}).value || db.members[0].id,
     insurer: v('insurer'), name: v('name'), product: v('product'), type: v('type'),
     premium: digits(v('premium')), cycle: v('cycle'),
-    start: ymStr(ym(v('start'))), end: open ? '' : ymStr(ym(v('end'))),
+    start: normYmd(v('start')), end: open ? '' : ymStr(ym(v('end'))),
     cover: v('cover'), payday: Math.min(31, +v('payday')) || null,
     payStart: ymStr(ym(v('payStart'))), payYears: +v('payYears') || null, payAmt: digits(v('payAmt')) || null,
     cancel: ymStr(ym(v('cancel'))), memo: v('memo'),
@@ -744,7 +771,7 @@ function importCSV(text) {
     const type = TYPES.includes(get('type')) ? get('type') : (get('type') || '기타');
     db.policies.push({
       id: uid(), who: m.id, insurer: get('insurer'), name: get('name') || `${get('insurer')} ${type}`, product: get('product'), type,
-      premium: prem, cycle: /연/.test(get('cycle')) ? 'Y' : 'M', start: ymStr(s), end: ymStr(e),
+      premium: prem, cycle: /연/.test(get('cycle')) ? 'Y' : 'M', start: normYmd(get('start')), end: ymStr(e),
       cover: get('cover'), payday: digits(get('payday')) || null, payStart: ymStr(ym(get('payStart'))),
       payYears: parseFloat(get('payYears')) || null, payAmt: digits(get('payAmt')) || null,
       cancel: ymStr(ym(get('cancel'))), memo: get('memo'),
@@ -1124,7 +1151,7 @@ function renderScanRows() {
         <label>종류<select data-f="type">${TYPES.map((t) => `<option${t === r.type ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
       </div>
       <div class="grid2">
-        <label>납입 시작 <small>모르면 비움</small><input type="month" data-f="start" value="${r.start}"></label>
+        <label>납입 시작 <small>모르면 비움</small><input type="date" data-f="start" value="${toDateInput(r.start)}"></label>
         <label>납입 끝<input type="month" data-f="end" value="${r.end}"${r.open ? ' disabled' : ''}></label>
       </div>
       <label class="check sm"><input type="checkbox" data-f="open"${r.open ? ' checked' : ''}><span>갱신형 · 끝 없음</span></label>
@@ -1172,7 +1199,7 @@ $('#s-rows').addEventListener('input', (e) => {
     if (f === 'open') $('[data-f=end]', row).disabled = el.checked;
     return;
   }
-  r[f] = f === 'start' || f === 'end' ? ymStr(ym(el.value)) : el.value.trim();
+  r[f] = f === 'start' ? normYmd(el.value) : f === 'end' ? ymStr(ym(el.value)) : el.value.trim();
   if (f === 'name' || f === 'insurer') $('.srow-on b', row).textContent = r.name || r.insurer || '이름 없음';
 });
 $('#s-rows').addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') e.target.dispatchEvent(new Event('input', { bubbles: true })); });

@@ -172,10 +172,15 @@ h1{font-size:24px;font-weight:800;margin:0;letter-spacing:-.5px}
 .meter.done i{background:var(--good)}
 .pol-foot{display:flex;justify-content:space-between;gap:10px;font-size:13.5px;color:var(--sub);margin-top:9px;font-variant-numeric:tabular-nums}
 .pol-foot .ok{color:var(--good-ink);font-weight:700}
-.pol-amts{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:12px}
+.pol-amts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.pol-amts>div:only-child,.pol-amts>div:first-child:has(+ .clm:last-child),.pol-amts>.rem:nth-child(3){grid-column:1/-1}
 .pol-amts div{background:var(--bg);border-radius:12px;padding:10px 12px}
 .pol-amts small{display:block;font-size:12px;color:var(--sub)}
-.pol-amts b{display:block;font-size:15.5px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+.pol-amts b{display:block;font-size:15px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pol-amts .rem b{color:var(--accent)}
+.pol-amts .clm{grid-column:1/-1}
+.pstats{margin:-6px 0 18px}
+.pstats div{background:var(--bg)}
 .pol-recv{margin-top:12px;padding:9px 12px;border-radius:12px;background:var(--bg);font-size:13px;color:var(--sub)}
 .pol-memo{margin-top:8px;font-size:12.5px;color:var(--mute)}
 .pol.done .pol-row b{color:var(--sub)}

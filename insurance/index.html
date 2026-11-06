@@ -46,6 +46,7 @@
 <dialog id="dlgPolicy" class="sheet">
 <form id="fPolicy" novalidate>
   <h2 id="pTitle">보험 추가</h2>
+  <div class="pol-amts pstats" id="p-stats" hidden></div>
   <button type="button" class="btn scanbtn" id="pScan" data-act="scan">📷 사진으로 한 번에 등록<small>보험 앱 캡처 · 보험증권 · 손글씨는 글자 붙여넣기 (무료)</small></button>
 
   <fieldset>
@@ -66,7 +67,7 @@
   </div>
 
   <div class="grid2">
-    <label>납입 시작 <small>모르면 비움</small><input id="p-start" type="month" placeholder="2018-03"></label>
+    <label>납입 시작 <small>계약일 · 모르면 비움</small><input id="p-start" type="date" placeholder="2018-03-15"></label>
     <label>납입 기간<span class="unit"><input id="p-years" type="number" inputmode="decimal" min="0" step="any" placeholder="20">년</span></label>
   </div>
   <div class="quick" aria-label="납입 기간 빠른 선택">
