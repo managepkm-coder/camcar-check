@@ -336,3 +336,19 @@ ol.note li{margin-bottom:4px}
 .pclaims{background:var(--bg);border-radius:14px;padding:12px 12px 4px;margin-bottom:12px}
 .pclaims .card-h b{font-size:14px}
 .pclaims .ev li{padding:8px 0}
+
+/* ── 알림 ── */
+.banner{display:flex;flex-direction:column;gap:6px;margin:0 0 12px}
+.banner button{display:block;width:100%;text-align:left;border:0;border-radius:14px;padding:12px 14px;cursor:pointer;
+  background:var(--fg);color:var(--card);font-size:14px;line-height:1.4}
+.banner b{margin-right:4px}
+.banner small{opacity:.75;margin-left:4px}
+.ev.alm li{grid-template-columns:52px minmax(0,1fr) auto}
+.ev.alm li.past{opacity:.5}
+.ev.alm .ev-t small{color:var(--accent);font-weight:700}
+.ev.alm li.past .ev-t small{color:var(--mute)}
+.ev.alm .ev-a .link{font-size:20px;text-decoration:none;padding:6px;border-radius:10px}
+.ev.alm .ev-a .link:active{background:var(--line)}
+a.btn{display:flex;text-decoration:none;color:var(--fg);text-align:center}
+a.btn.big{margin-top:8px}
+#a-until-wrap[hidden]{display:none}

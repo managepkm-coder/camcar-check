@@ -72,7 +72,7 @@ let NOW = nowIdx();
 let db = load();
 let ui = (() => { try { return { who: 'all', view: 'timeline', ...JSON.parse(localStorage.getItem(UI_KEY)) }; } catch { return { who: 'all', view: 'timeline' }; } })();
 
-function blank() { return { members: [{ id: uid(), name: '본인', birth: null, slot: 0 }], policies: [] }; }
+function blank() { return { members: [{ id: uid(), name: '본인', birth: null, slot: 0 }], policies: [], alarms: [] }; }
 function load() {
   try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.members) && d.members.length) return normalize(d); } catch {}
   return blank();
@@ -104,7 +104,14 @@ function normalize(d) {
       id: String((c && c.id) || uid()), date: normDate(c && c.date), amount: Math.round(+(c && c.amount) || 0), memo: String((c && c.memo) || '').slice(0, 30),
     })).filter((c) => c.date && c.amount > 0),
   }));
-  return { members, policies };
+  const pids = new Set(policies.map((p) => p.id));
+  const alarms = (Array.isArray(d.alarms) ? d.alarms : []).filter((a) => a && typeof a === 'object').map((a) => ({
+    id: String(a.id || uid()), title: String(a.title || '알림').slice(0, 40), policy: pids.has(a.policy) ? a.policy : '',
+    date: normDate(a.date), time: /^\d{2}:\d{2}$/.test(a.time) ? a.time : '09:00',
+    repeat: ['none', 'month', 'year'].includes(a.repeat) ? a.repeat : 'none',
+    before: [0, 1, 3, 7].includes(+a.before) ? +a.before : 0, until: normDate(a.until), memo: String(a.memo || '').slice(0, 100),
+  })).filter((a) => a.date);
+  return { members, policies, alarms };
 }
 
 /* 받은 보험금: 보험마다 claims: [{ id, date: 'YYYY-MM-DD', amount, memo }] */
@@ -198,6 +205,8 @@ function render() {
   $('#events').innerHTML = empty ? '' : eventsHTML(live);
   $('#payouts').innerHTML = empty ? '' : payoutsHTML(live);
   $('#claims').innerHTML = empty ? '' : claimsHTML(list);
+  $('#alarms').innerHTML = empty ? '' : alarmsHTML();
+  $('#alarmBanner').innerHTML = alarmBannerHTML();
   $('#cancelled').innerHTML = gone.length
     ? `<details class="gone"><summary>해지한 보험 ${gone.length}건 <small>지금까지 ${won(gone.reduce((a, p) => a + calc(p).paidAmt, 0))}원 냄</small></summary>${gone.map(cardHTML).join('')}</details>`
     : '';
@@ -508,6 +517,7 @@ function openPolicy(id) {
   $('#p-helper').open = false;
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
+  renderPolicyAlarms();
   $('#p-stats').hidden = !editing;
   if (editing) { const k = calc(editing); $('#p-stats').innerHTML = amountBoxes(editing, k); }
   renderPolicyClaims();
@@ -687,7 +697,9 @@ function deleteMember() {
   const n = db.policies.filter((p) => p.who === m.id).length;
   if (!confirm(n ? `${m.name}의 보험 ${n}건도 같이 지워져요. 지울까요?` : `${m.name}을(를) 지울까요?`)) return;
   db.members = db.members.filter((x) => x !== m);
+  const gone = new Set(db.policies.filter((p) => p.who === m.id).map((p) => p.id));
   db.policies = db.policies.filter((p) => p.who !== m.id);
+  db.alarms = (db.alarms || []).filter((a) => !gone.has(a.policy));
   save(); dlgM.close();
   if ($('#dlgSettings').open) renderMembers();
   render();
@@ -797,9 +809,9 @@ async function readFile(file) {
   catch { return new TextDecoder('euc-kr').decode(buf); } // 한글 엑셀의 기본 CSV 저장 형식
 }
 
-async function saveFile(name, text, type) {
+async function saveFile(name, text, type, share = true) {
   const blob = new Blob([text], { type });
-  try {
+  if (share) try {
     const file = new File([blob], name, { type });
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
   } catch (err) { if (err && err.name === 'AbortError') return; }
@@ -816,7 +828,7 @@ function sample() {
   const sp = { id: uid(), name: '배우자', birth: 1985, slot: 1 };
   const kid = { id: uid(), name: '첫째', birth: 2016, slot: 2 };
   const P = (who, insurer, name, type, premium, start, end, extra = {}) => ({ id: uid(), who: who.id, insurer, name, product: '', type, premium, cycle: 'M', start, end, cover: '', payday: null, payStart: '', payYears: null, payAmt: null, cancel: '', memo: '', ...extra });
-  return {
+  const out = {
     members: [me, sp, kid],
     policies: [
       P(me, '한화생명', '한화 연금', '연금', 200000, '2014-03', '2034-02', { payStart: '2042-01', payAmt: 500000, memo: '평생 받는 연금' }),
@@ -835,6 +847,13 @@ function sample() {
       P(kid, '흥국화재', '흥국 치아', '치아', 18900, '2024-03', '2034-02'),
     ],
   };
+  const pid = (name) => out.policies.find((p) => p.name === name).id;
+  const t = new Date();
+  out.alarms = [
+    { id: uid(), title: '보험료 이체일', policy: pid('한화 연금'), date: `${t.getFullYear()}-${pad(t.getMonth() + 1)}-25`, time: '09:00', repeat: 'month', before: 1, until: '2034-02-25', memo: '' },
+    { id: uid(), title: '갱신일', policy: pid('현대 실손'), date: '2027-04-01', time: '09:00', repeat: 'year', before: 7, until: '', memo: '보험료 오르는지 확인' },
+  ];
+  return out;
 }
 
 /* ── 사진으로 등록 (무료 · 폰 안에서 글자 인식) ──
@@ -1213,6 +1232,204 @@ function toast(text) {
   clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3500);
 }
 
+/* ── 알림 ──
+ * 서버가 없는 웹앱은 앱이 닫혀 있을 때 직접 폰 알림을 보낼 수 없다.
+ * 그래서 알림을 폰 캘린더(.ics 파일 → 삼성 캘린더 등, 또는 Google 캘린더)에 넣어 그 앱이 제때 알리게 하고,
+ * 앱을 열면 다가온 알림을 맨 위에 띄운다.
+ * db.alarms: [{ id, title, policy, date: 'YYYY-MM-DD', time: 'HH:MM', repeat: none|month|year, before: 0|1|3|7, until, memo }] */
+const REPEAT_LABEL = { none: '한 번', month: '매달', year: '매년' };
+const BEFORE_LABEL = { 0: '그 시각에', 1: '하루 전', 3: '3일 전', 7: '일주일 전' };
+const parseD = (str) => { const [y, m, d] = str.split('-').map(Number); return new Date(y, m - 1, d); };
+const fmtD = (dt) => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+const addMonths = (base, n, day) => { const y = base.getFullYear(), m = base.getMonth() + n; return new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate())); };
+const today0 = () => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; };
+
+/** 오늘 이후(오늘 포함) 다음 알림 날짜. 반복이 끝났으면 null, 한 번짜리는 지났어도 그 날짜 */
+function nextOcc(a, from = today0()) {
+  const base = parseD(a.date);
+  if (a.repeat === 'none') return base;
+  const step = a.repeat === 'year' ? 12 : 1;
+  let d = base;
+  for (let k = step; d < from && k < 12 * 200; k += step) d = addMonths(base, k, base.getDate());
+  return a.until && d > parseD(a.until) ? null : d;
+}
+const dday = (d) => Math.round((d - today0()) / 86400000);
+const alarmPolicy = (a) => db.policies.find((p) => p.id === a.policy) || null;
+const alarmTitle = (a) => { const p = alarmPolicy(a); return p ? `${a.title} · ${p.name}` : a.title; };
+const visibleAlarms = () => (db.alarms || []).filter((a) => { const p = alarmPolicy(a); return ui.who === 'all' || (p && p.who === ui.who); });
+
+function alarmBannerHTML() {
+  const due = (db.alarms || []).map((a) => ({ a, d: nextOcc(a) })).filter(({ a, d }) => d && dday(d) >= 0 && dday(d) <= Math.max(a.before, 0))
+    .sort((x, y) => x.d - y.d);
+  if (!due.length) return '';
+  return `<div class="banner" role="status">${due.map(({ a, d }) => `<button type="button" data-alarm="${a.id}">🔔 <b>${dday(d) ? `D-${dday(d)}` : '오늘'}</b> ${esc(alarmTitle(a))} <small>${d.getMonth() + 1}/${d.getDate()} ${a.time}</small></button>`).join('')}</div>`;
+}
+
+function alarmsHTML() {
+  const rows = visibleAlarms().map((a) => ({ a, d: nextOcc(a) }))
+    .sort((x, y) => (x.d && dday(x.d) >= 0 ? 0 : 1) - (y.d && dday(y.d) >= 0 ? 0 : 1) || (x.d ? x.d : Infinity) - (y.d ? y.d : Infinity));
+  return `<div class="card">
+    <div class="card-h"><h3>알림</h3><button type="button" class="link" data-act="addAlarm">＋ 알림 만들기</button></div>
+    ${rows.length ? `<ol class="ev alm">${rows.map(({ a, d }) => alarmRow(a, d)).join('')}</ol>
+      <button type="button" class="btn wide" data-act="icsAll">📅 알림 ${rows.length}개 모두 캘린더에 넣기</button>`
+    : '<p class="note">이체일, 갱신일, 납입 끝나는 날처럼 챙길 날짜를 정해 두면 그날 폰 캘린더가 알려 줘요.</p>'}
+  </div>`;
+}
+function alarmRow(a, d, inPolicy = false) {
+  const past = !d || dday(d) < 0;
+  const when = !d ? '끝남' : past ? '지남' : dday(d) === 0 ? '오늘' : `D-${dday(d)}`;
+  const p = alarmPolicy(a);
+  return `<li data-alarm="${a.id}" role="button" tabindex="0" class="${past ? 'past' : ''}">
+    <span class="ev-t">${d ? `${d.getMonth() + 1}/${d.getDate()}` : '-'}<small>${when}</small></span>
+    <span class="ev-n"><b>${esc(a.title)}</b><small>${!inPolicy && p ? `${esc(p.name)} · ` : ''}${REPEAT_LABEL[a.repeat]} ${a.time}${a.before ? ` · ${BEFORE_LABEL[a.before]}` : ''}</small></span>
+    <span class="ev-a"><span class="link" data-ics="${a.id}" role="button" tabindex="0" aria-label="캘린더에 넣기">📅</span></span></li>`;
+}
+
+/* ── 캘린더 파일(.ics) · Google 캘린더 ── */
+const icsEsc = (t) => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+function icsFold(line) { // 한 줄 75바이트 제한 (한글은 3바이트)
+  const enc = new TextEncoder();
+  let out = '', n = 0;
+  for (const ch of line) { const b = enc.encode(ch).length; if (n + b > 74) { out += '\r\n '; n = 1; } out += ch; n += b; }
+  return out;
+}
+const icsTime = (dt) => `${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}T${pad(dt.getHours())}${pad(dt.getMinutes())}00`;
+function alarmStart(a) { const [h, m] = a.time.split(':').map(Number); const d = parseD(a.date); d.setHours(h, m); return d; }
+function alarmRule(a) {
+  if (a.repeat === 'none') return '';
+  const until = a.until ? `;UNTIL=${a.until.replace(/-/g, '')}T235959` : '';
+  return a.repeat === 'month' ? `RRULE:FREQ=MONTHLY;BYMONTHDAY=${parseD(a.date).getDate()}${until}` : `RRULE:FREQ=YEARLY${until}`;
+}
+function alarmDesc(a) {
+  const p = alarmPolicy(a);
+  return [p ? `${p.insurer} ${p.name} · ${p.cycle === 'Y' ? '연' : '월'} ${won(p.premium)}원` : '', a.memo, '우리집 보험 앱에서 만든 알림'].filter(Boolean).join('\n');
+}
+function icsFile(alarms) {
+  const now = new Date();
+  const stampUtc = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`;
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//camcar-check//insurance//KO', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+  for (const a of alarms) {
+    const st = alarmStart(a), en = new Date(st.getTime() + 15 * 60000), rule = alarmRule(a);
+    lines.push('BEGIN:VEVENT', `UID:${a.id}@insurance.camcar-check`, `DTSTAMP:${stampUtc}`,
+      `DTSTART:${icsTime(st)}`, `DTEND:${icsTime(en)}`, `SUMMARY:${icsEsc(alarmTitle(a))}`, `DESCRIPTION:${icsEsc(alarmDesc(a))}`,
+      ...(rule ? [rule] : []),
+      'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(alarmTitle(a))}`, `TRIGGER:${a.before ? `-P${a.before}D` : '-PT0M'}`, 'END:VALARM',
+      'END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  return lines.map(icsFold).join('\r\n') + '\r\n';
+}
+function downloadIcs(alarms) {
+  if (!alarms.length) return;
+  saveFile(`insurance-alarms-${stamp()}.ics`, icsFile(alarms), 'text/calendar', false);
+  toast('캘린더 파일을 받았어요. 알림창이나 다운로드에서 열어 캘린더에 저장하세요.');
+}
+function gcalUrl(a) {
+  const st = alarmStart(a), en = new Date(st.getTime() + 15 * 60000), rule = alarmRule(a);
+  const q = new URLSearchParams({ action: 'TEMPLATE', text: alarmTitle(a), dates: `${icsTime(st)}/${icsTime(en)}`, details: alarmDesc(a), ctz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul' });
+  if (rule) q.set('recur', rule);
+  return `https://calendar.google.com/calendar/render?${q}`;
+}
+
+/* ── 알림 만들기 / 고치기 ── */
+let editingAlarm = null, lastAlarm = null;
+const dlgA = $('#dlgAlarm');
+function alarmStep(name) { $$('#dlgAlarm [data-astep]').forEach((el) => { el.hidden = el.dataset.astep !== name; }); }
+function openAlarm(id, pid) {
+  editingAlarm = id ? (db.alarms || []).find((a) => a.id === id) || null : null;
+  const a = editingAlarm || { title: '', policy: pid || '', date: todayStr(), time: '09:00', repeat: 'none', before: 0, until: '', memo: '' };
+  $('#a-policy').innerHTML = '<option value="">보험 고르지 않음</option>' + db.members.map((m) => {
+    const ps = db.policies.filter((p) => p.who === m.id);
+    return ps.length ? `<optgroup label="${esc(m.name)}">${ps.map((p) => `<option value="${p.id}"${p.id === a.policy ? ' selected' : ''}>${esc(p.name)}${p.insurer ? ` · ${esc(p.insurer)}` : ''}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  $('#aTitle').textContent = editingAlarm ? '알림 고치기' : '알림 만들기';
+  $('#a-title').value = a.title; $('#a-date').value = a.date; $('#a-time').value = a.time;
+  $('#a-repeat').value = a.repeat; $('#a-before').value = String(a.before); $('#a-until').value = a.until; $('#a-memo').value = a.memo;
+  $('#aDel').hidden = !editingAlarm;
+  $('#a-err').textContent = '';
+  syncRepeat();
+  alarmStep('form');
+  dlgA.showModal();
+}
+function syncRepeat() { $('#a-until-wrap').hidden = $('#a-repeat').value === 'none'; }
+
+/** 빠른 선택: 고른 보험의 정보로 날짜·반복을 채운다 */
+function alarmPreset(kind) {
+  const p = db.policies.find((x) => x.id === $('#a-policy').value);
+  const t = today0();
+  const setDate = (d) => { $('#a-date').value = fmtD(d); };
+  if (kind === 'pay') {
+    $('#a-title').value = '보험료 이체일';
+    $('#a-repeat').value = p && p.cycle === 'Y' ? 'year' : 'month';
+    if (p) {
+      const day = +p.payday || dayOf(p.start) || 25;
+      let d = new Date(t.getFullYear(), t.getMonth(), Math.min(day, new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate()));
+      if (p.cycle === 'Y' && ym(p.start) != null) { const sm = ym(p.start) % 12; d = new Date(t.getFullYear(), sm, Math.min(day, 28)); if (d < t) d = new Date(t.getFullYear() + 1, sm, Math.min(day, 28)); }
+      else if (d < t) d = addMonths(d, 1, day);
+      setDate(d);
+      const e = calc(p).e;
+      $('#a-until').value = e != null ? `${Math.floor(e / 12)}-${pad((e % 12) + 1)}-${pad(Math.min(day, 28))}` : '';
+    }
+    $('#a-before').value = '1';
+  } else if (kind === 'renew') {
+    $('#a-title').value = '갱신일';
+    $('#a-repeat').value = 'year';
+    if (p && p.start) { const b = parseD(toDateInput(p.start)); let d = new Date(t.getFullYear(), b.getMonth(), b.getDate()); if (d < t) d = new Date(t.getFullYear() + 1, b.getMonth(), b.getDate()); setDate(d); }
+    $('#a-before').value = '7';
+  } else if (kind === 'end') {
+    $('#a-title').value = '납입 끝나는 날';
+    $('#a-repeat').value = 'none';
+    const e = p ? calc(p).e : null;
+    if (e != null) setDate(new Date(Math.floor(e / 12), e % 12, Math.min(+p.payday || dayOf(p.start) || 1, 28)));
+    $('#a-before').value = '7';
+  } else if (kind === 'claim') {
+    $('#a-title').value = '보험금 청구하기'; $('#a-repeat').value = 'none'; $('#a-before').value = '0';
+  } else if (kind === 'pension') {
+    $('#a-title').value = '연금 받기 시작'; $('#a-repeat').value = 'none'; $('#a-before').value = '7';
+    if (p && ym(p.payStart) != null) { const i = ym(p.payStart); setDate(new Date(Math.floor(i / 12), i % 12, 1)); }
+  }
+  syncRepeat();
+}
+
+$('#fAlarm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const rec = {
+    id: editingAlarm ? editingAlarm.id : uid(),
+    title: $('#a-title').value.trim().slice(0, 40), policy: $('#a-policy').value, date: normDate($('#a-date').value),
+    time: /^\d{2}:\d{2}/.test($('#a-time').value) ? $('#a-time').value.slice(0, 5) : '09:00',
+    repeat: $('#a-repeat').value, before: +$('#a-before').value || 0,
+    until: $('#a-repeat').value === 'none' ? '' : normDate($('#a-until').value), memo: $('#a-memo').value.trim().slice(0, 100),
+  };
+  const err = !rec.title ? '무슨 알림인지 적어 주세요. (예: 보험료 이체일)' : !rec.date ? '날짜를 넣어 주세요.'
+    : rec.until && rec.until < rec.date ? '반복 끝 날짜가 시작보다 빨라요.' : '';
+  if (err) { $('#a-err').textContent = err; return; }
+  db.alarms = db.alarms || [];
+  if (editingAlarm) Object.assign(editingAlarm, rec); else db.alarms.push(rec);
+  lastAlarm = editingAlarm || rec;
+  save(); render(); persist();
+  if (dlgP.open) renderPolicyAlarms();
+  // 저장한 뒤: 폰 알림을 받으려면 캘린더에 넣어야 한다
+  const d = nextOcc(lastAlarm);
+  $('#a-saved').textContent = `${alarmTitle(lastAlarm)} · ${d ? `${fmtD(d).replace(/-/g, '.')} ${lastAlarm.time}` : '반복 끝남'} · ${REPEAT_LABEL[lastAlarm.repeat]}${lastAlarm.before ? ` · ${BEFORE_LABEL[lastAlarm.before]} 알림` : ''}`;
+  $('#a-gcal').href = gcalUrl(lastAlarm);
+  alarmStep('cal');
+});
+function deleteAlarm() {
+  if (!editingAlarm || !confirm('이 알림을 지울까요?\n(캘린더에 이미 넣었다면 캘린더에서도 지워 주세요)')) return;
+  db.alarms = db.alarms.filter((a) => a !== editingAlarm);
+  save(); dlgA.close(); render();
+  if (dlgP.open) renderPolicyAlarms();
+}
+function renderPolicyAlarms() {
+  const el = $('#p-alarms');
+  el.hidden = !editing;
+  if (!editing) return;
+  const as = (db.alarms || []).filter((a) => a.policy === editing.id);
+  el.innerHTML = `<div class="card-h"><b>알림${as.length ? ` ${as.length}개` : ''}</b><button type="button" class="link" data-act="addAlarmHere">＋ 알림</button></div>
+    ${as.length ? `<ol class="ev alm">${as.map((a) => alarmRow(a, nextOcc(a), true)).join('')}</ol>` : '<p class="sub">이체일·갱신일 알림을 만들어 두세요.</p>'}`;
+}
+$('#a-repeat').addEventListener('change', syncRepeat);
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
@@ -1228,18 +1445,24 @@ const actions = {
   cancelScan: () => { if (scanRun) scanRun.cancel = true; dlgS.close(); },
   addMember: () => openMember(null),
   addClaim: () => openClaim(null, null),
+  addAlarm: () => openAlarm(null, ui.who !== 'all' ? (db.policies.find((p) => p.who === ui.who) || {}).id : ''),
+  addAlarmHere: () => { if (editing) openAlarm(null, editing.id); },
+  deleteAlarm,
+  icsAll: () => downloadIcs(visibleAlarms().filter((a) => nextOcc(a))),
+  icsOne: () => { if (lastAlarm) downloadIcs([lastAlarm]); },
   addClaimHere: () => { if (editing) openClaim(null, editing.id); },
   deleteClaim,
   deleteMember,
   deletePolicy: () => {
     if (!editing || !confirm(`‘${editing.name}’을(를) 지울까요?`)) return;
     db.policies = db.policies.filter((p) => p !== editing);
+    db.alarms = (db.alarms || []).filter((a) => a.policy !== editing.id);
     save(); dlgP.close(); render();
   },
   calcRemain,
-  exportJson: () => saveFile(`보험백업_${stamp()}.json`, JSON.stringify({ app: 'insure', version: 1, exported: new Date().toISOString(), ...db }, null, 1), 'application/json'),
-  exportCsv: () => saveFile(`보험목록_${stamp()}.csv`, toCSV(db.policies), 'text/csv'),
-  csvTemplate: () => saveFile('보험_입력양식.csv', '﻿' + [
+  exportJson: () => saveFile(`insurance-backup-${stamp()}.json`, JSON.stringify({ app: 'insure', version: 1, exported: new Date().toISOString(), ...db }, null, 1), 'application/json'),
+  exportCsv: () => saveFile(`insurance-list-${stamp()}.csv`, toCSV(db.policies), 'text/csv'),
+  csvTemplate: () => saveFile('insurance-template.csv', '﻿' + [
     csvLine(CSV_COLS.map((c) => c[1])),
     csvLine(['본인', '교보생명', '교보 변액연금', '', '연금', '100000', '월납', '2016-09', '', '12', '', '25', '2047-01', '10', '300000', '', '']),
     csvLine(['아내', '현대해상', '현대 실손', '', '실손', '38500', '월납', '2017-04', '', '', '', '', '', '', '', '', '갱신형은 납입끝·기간을 비워 두세요']),
@@ -1257,7 +1480,7 @@ const actions = {
 };
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo]');
+  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset]');
   if (!t) return;
   if (t.hasAttribute('data-close')) { t.closest('dialog').close(); return; }
   if (t.dataset.who) { ui.who = t.dataset.who; saveUI(); render(); return; }
@@ -1265,12 +1488,15 @@ document.addEventListener('click', (e) => {
   if (t.dataset.years) { $('#p-years').value = t.dataset.years; fromYears(); return; }
   if (t.dataset.member) { openMember(t.dataset.member); return; }
   if (t.dataset.claim) { openClaim(t.dataset.claim); return; }
+  if (t.dataset.ics) { const a = (db.alarms || []).find((x) => x.id === t.dataset.ics); if (a) downloadIcs([a]); return; }
+  if (t.dataset.alarm) { openAlarm(t.dataset.alarm); return; }
+  if (t.dataset.preset) { alarmPreset(t.dataset.preset); return; }
   if (t.dataset.memo) { $('#c-memo').value = t.dataset.memo; return; }
   if (t.dataset.act) { actions[t.dataset.act](t); return; }
   if (t.dataset.id) openPolicy(t.dataset.id);
 });
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-id],[role=button][data-claim],[role=button][data-act]')) { e.preventDefault(); e.target.click(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-id],[role=button][data-claim],[role=button][data-act],[role=button][data-alarm],[role=button][data-ics]')) { e.preventDefault(); e.target.click(); }
 });
 // 시트 바깥(어두운 부분)을 누르면 닫기
 $$('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));
