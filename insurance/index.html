@@ -67,8 +67,12 @@
   <label>정식 상품명 <small>선택</small><input id="p-product" placeholder="증권에 적힌 상품명"></label>
 
   <div class="grid2">
-    <label>납입액<input id="p-premium" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="p-premium-hint"></small></label>
+    <label>납입액 <small>매달(연납이면 매년)</small><input id="p-premium" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="p-premium-hint"></small></label>
     <label>납입 주기<select id="p-cycle"><option value="M">월납</option><option value="Y">연납</option></select></label>
+  </div>
+  <div class="grid2">
+    <label>일시납 <small>처음에 한 번 · 선택</small><input id="p-lump" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="p-lump-hint"></small></label>
+    <label>일시납한 날 <small>비우면 납입 시작일</small><input id="p-lumpDate" type="date"></label>
   </div>
 
   <div class="grid2">
