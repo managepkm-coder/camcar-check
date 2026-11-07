@@ -69,7 +69,18 @@ const manwon = (n) => {
 
 /* ── 저장소 ── */
 let NOW = nowIdx();
-let db = load();
+
+/* 가족 공유 상태 — 자세한 것은 아래 '가족 실시간 공유' */
+const CFG_KEY = 'insure.fbcfg', SYNC_KEY = 'insure.sync', SHARED_KEY = 'insure.shared', SAVED_AT = 'insure.savedAt';
+const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const validCfg = (c) => !!(c && c.apiKey && c.authDomain && c.projectId && c.appId);
+const getCfg = () => (validCfg(window.FIREBASE_CONFIG) ? window.FIREBASE_CONFIG : validCfg(lsGet(CFG_KEY)) ? lsGet(CFG_KEY) : null);
+let sync = lsGet(SYNC_KEY);          // { hid, role: 'owner' | 'viewer', ownerName } | null
+let RO = !!(sync && sync.role === 'viewer' && getCfg()); // 가족 장부를 보기만 하는 중
+
+// 보기만 하는 중이면 이 폰의 내 장부 대신 마지막으로 받은 가족 장부를 보여 준다 (내 장부는 그대로 둔다)
+let db = RO ? normalize(lsGet(SHARED_KEY) || {}) : load();
 let ui = (() => { try { return { who: 'all', view: 'timeline', ...JSON.parse(localStorage.getItem(UI_KEY)) }; } catch { return { who: 'all', view: 'timeline' }; } })();
 
 function blank() { return { members: [{ id: uid(), name: '본인', birth: null, slot: 0 }], policies: [], alarms: [] }; }
@@ -77,7 +88,12 @@ function load() {
   try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.members) && d.members.length) return normalize(d); } catch {}
   return blank();
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { alert('저장 공간이 부족해 저장하지 못했어요.'); } }
+function save() {
+  if (RO) return; // 보기만 하는 장부는 이 폰에서 바꾸지 않는다
+  try { localStorage.setItem(KEY, JSON.stringify(db)); localStorage.setItem(SAVED_AT, String(Date.now())); }
+  catch { alert('저장 공간이 부족해 저장하지 못했어요.'); }
+  if (sync && sync.role === 'owner') pushSoon();
+}
 function saveUI() { try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch {} }
 
 /** 불러온 데이터의 모양을 맞춘다 (백업 파일이 오래됐거나 손으로 고친 경우 대비) */
@@ -516,7 +532,7 @@ function whoPicker(sel) {
 function openPolicy(id) {
   editing = id ? db.policies.find((p) => p.id === id) : null;
   const p = editing || { who: ui.who !== 'all' ? ui.who : db.members[0].id, cycle: 'M', type: '건강' };
-  $('#pTitle').textContent = editing ? '보험 수정' : '보험 추가';
+  $('#pTitle').textContent = RO ? '보험 정보 (보기만)' : editing ? '보험 수정' : '보험 추가';
   whoPicker(p.who);
   const set = (f, v) => { $(`#p-${f}`).value = v ?? ''; };
   set('insurer', p.insurer); set('type', p.type); set('name', p.name); set('product', p.product);
@@ -540,6 +556,7 @@ function openPolicy(id) {
   $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
   fromEnd(); syncOpen(); premiumHint();
+  if (RO) { $$('#fPolicy input, #fPolicy select, #fPolicy textarea').forEach((el) => { el.disabled = true; }); $('#p-more').open = true; }
   dlgP.showModal();
 }
 
@@ -578,6 +595,7 @@ function openClaim(cid, pid) {
 }
 $('#fClaim').addEventListener('submit', (e) => {
   e.preventDefault();
+  if (RO) return;
   const p = db.policies.find((x) => x.id === $('#c-policy').value);
   const amount = digits($('#c-amount').value), date = normDate($('#c-date').value);
   const err = !p ? '어느 보험인지 골라 주세요.' : !date ? '받은 날을 넣어 주세요.' : !amount ? '받은 금액을 넣어 주세요.' : '';
@@ -657,6 +675,7 @@ function policyError(p, open) {
 
 $('#fPolicy').addEventListener('submit', (e) => {
   e.preventDefault();
+  if (RO) return;
   const v = (f) => $(`#p-${f}`).value.trim();
   const open = $('#p-open').checked;
   const p = {
@@ -712,6 +731,7 @@ function openMember(id) {
 
 $('#fMember').addEventListener('submit', (e) => {
   e.preventDefault();
+  if (RO) return;
   const name = $('#m-name').value.trim();
   const b = digits($('#m-birth').value);
   const thisYear = new Date().getFullYear();
@@ -1426,6 +1446,7 @@ function alarmPreset(kind) {
 
 $('#fAlarm').addEventListener('submit', (e) => {
   e.preventDefault();
+  if (RO) return;
   const rec = {
     id: editingAlarm ? editingAlarm.id : uid(),
     title: $('#a-title').value.trim().slice(0, 40), policy: $('#a-policy').value, date: normDate($('#a-date').value),
@@ -1508,6 +1529,332 @@ function movePolicy(toId) {
   toast(`‘${moving.name}’을(를) ${to.name} 보험으로 옮겼어요.`);
 }
 
+/* ── 가족 실시간 공유 (Firebase) ──
+ * 주인이 '공유 시작'을 하면 장부를 Firebase(Firestore)의 households/{hid} 문서 하나에 올리고,
+ * 고칠 때마다 그 문서를 덮어쓴다. 초대 링크(#join=코드&c=설정)를 받은 가족은 구글로 로그인해
+ * 그 문서를 실시간으로 받아 보기만 한다. 누가 무엇을 할 수 있는지는 firestore.rules 가 정한다.
+ * 주인의 장부는 여전히 이 폰(localStorage)에도 있고, 보는 사람의 원래 장부도 그대로 남는다. */
+const FB_SDK = './vendor/firebase-12.19.0.mjs';
+let fb = null, fbUser = null, unsub = null, shareDoc = null, pendingJoin = null, shareStatus = null, lastInvite = null;
+
+const plain = (o) => JSON.parse(JSON.stringify(o));
+const randomId = (n = 20) => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; return [...crypto.getRandomValues(new Uint8Array(n))].map((x) => a[x % a.length]).join(''); };
+const b64u = (s) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s) => atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+const myName = () => (fbUser && (fbUser.displayName || (fbUser.email || '').split('@')[0])) || '가족';
+/** Firebase 콘솔의 `const firebaseConfig = { apiKey: "...", ... }` 를 그대로 붙여넣어도 읽는다 */
+function parseCfg(text) {
+  const t = String(text || ''), cfg = {};
+  for (const k of ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId']) {
+    const m = t.match(new RegExp(`["']?${k}["']?\\s*:\\s*["']([^"']+)["']`));
+    if (m) cfg[k] = m[1].trim();
+  }
+  return validCfg(cfg) ? cfg : null;
+}
+function shareErr(e) {
+  const c = (e && e.code) || '';
+  if (c === 'auth/unauthorized-domain') return `Firebase ‘승인된 도메인’에 ${location.host} 를 추가해 주세요. (설정 3단계)`;
+  if (c === 'auth/operation-not-allowed' || c === 'auth/configuration-not-found') return 'Firebase Authentication에서 Google 로그인을 사용 설정해 주세요. (설정 2단계)';
+  if (c === 'auth/popup-blocked') return '로그인 창이 막혔어요. 홈 화면 앱 말고 크롬 브라우저에서 이 주소를 열어 로그인해 보세요. 한 번 로그인하면 앱에서도 로그인돼요.';
+  if (c === 'auth/network-request-failed' || c === 'unavailable') return '인터넷 연결을 확인해 주세요.';
+  if (c.startsWith('auth/invalid-api-key') || c.startsWith('auth/api-key-not-valid')) return 'Firebase 설정 값이 맞지 않아요. 다시 붙여넣어 주세요.';
+  if (c === 'permission-denied') return '권한이 없어요. Firestore 규칙을 게시했는지(설정 5단계) 확인해 주세요.';
+  if (c === 'not-found') return '공유 장부를 찾을 수 없어요. 주인이 공유를 껐을 수 있어요.';
+  return (e && e.message) || '알 수 없는 오류가 났어요.';
+}
+function setShareStatus(kind, e) { shareStatus = { kind, msg: kind === 'error' ? shareErr(e) : '', at: new Date() }; renderShare(); }
+
+async function fbInit() {
+  if (fb) return fb;
+  const cfg = getCfg();
+  if (!cfg) throw new Error('Firebase 설정을 먼저 붙여넣어 주세요.');
+  const m = await import(FB_SDK);
+  const app = m.initializeApp(cfg);
+  const auth = m.getAuth(app), fs = m.getFirestore(app);
+  if (window.FIREBASE_EMULATOR) { // 시험용 (실제 앱에서는 쓰지 않음)
+    m.connectAuthEmulator(auth, `http://${window.FIREBASE_EMULATOR}:9099`, { disableWarnings: true });
+    m.connectFirestoreEmulator(fs, window.FIREBASE_EMULATOR, 8080);
+  }
+  fb = { m, auth, fs };
+  await new Promise((res) => { const off = m.onAuthStateChanged(auth, (u) => { fbUser = u; off(); res(); }); });
+  m.onAuthStateChanged(auth, (u) => {
+    const changed = (u && u.uid) !== (fbUser && fbUser.uid);
+    fbUser = u;
+    if (changed && !u && sync) stopListening();
+    renderShare();
+  });
+  return fb;
+}
+async function signIn() {
+  const { m, auth } = await fbInit();
+  try {
+    if (window.__testSignIn) await window.__testSignIn(fb); // 시험용
+    else await m.signInWithPopup(auth, new m.GoogleAuthProvider());
+  } catch (e) {
+    if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return false;
+    throw e;
+  }
+  fbUser = auth.currentUser;
+  return !!fbUser;
+}
+
+let pushT = null;
+function pushSoon() { clearTimeout(pushT); pushT = setTimeout(pushNow, 700); }
+async function pushNow() {
+  if (!sync || sync.role !== 'owner' || !fb || !fbUser) return;
+  try {
+    await fb.m.updateDoc(fb.m.doc(fb.fs, 'households', sync.hid), {
+      data: plain(db), savedAt: +localStorage.getItem(SAVED_AT) || Date.now(), ownerName: myName(), updatedAt: fb.m.serverTimestamp(),
+    });
+    setShareStatus('saved');
+  } catch (e) { setShareStatus('error', e); }
+}
+
+function stopListening() { if (unsub) { unsub(); unsub = null; } }
+function listen() {
+  if (!fb || !sync || !fbUser) return;
+  stopListening();
+  const role = sync.role;
+  unsub = fb.m.onSnapshot(fb.m.doc(fb.fs, 'households', sync.hid), (snap) => {
+    if (snap.metadata.hasPendingWrites) return;
+    if (!snap.exists()) { endShare(role === 'viewer' ? '가족이 공유를 껐어요. 내 장부로 돌아왔어요.' : '공유 장부가 지워졌어요. 이 폰의 장부는 그대로 있어요.'); return; }
+    const d = snap.data();
+    shareDoc = d;
+    if (role === 'viewer') {
+      db = normalize(d.data || {});
+      lsSet(SHARED_KEY, d.data || {});
+      sync.ownerName = d.ownerName || sync.ownerName; lsSet(SYNC_KEY, sync);
+      render();
+    } else {
+      // 주인이 여러 폰에서 쓸 때: 더 늦게 저장된 쪽을 따른다
+      const localAt = +localStorage.getItem(SAVED_AT) || 0;
+      if ((d.savedAt || 0) > localAt) {
+        db = normalize(d.data || {});
+        try { localStorage.setItem(KEY, JSON.stringify(db)); localStorage.setItem(SAVED_AT, String(d.savedAt)); } catch {}
+        render();
+      } else if ((d.savedAt || 0) < localAt) pushSoon();
+    }
+    shareStatus = shareStatus && shareStatus.kind === 'error' ? null : shareStatus;
+    renderShare();
+  }, (e) => {
+    // 문서가 지워졌거나(공유 끔) 보는 사람에서 빠지면 읽기 권한이 없어진다
+    if (e.code === 'permission-denied') endShare(role === 'viewer' ? '더 이상 이 장부를 볼 수 없어요. 내 장부로 돌아왔어요.' : '가족 공유가 꺼졌어요. 이 폰의 장부는 그대로 있어요.');
+    else setShareStatus('error', e);
+  });
+}
+function endShare(msg) {
+  stopListening();
+  const wasViewer = RO;
+  sync = null; shareDoc = null; lastInvite = null;
+  lsSet(SYNC_KEY, null);
+  if (wasViewer) { RO = false; lsSet(SHARED_KEY, null); db = load(); ui.who = 'all'; }
+  applyRO(); render(); renderShare();
+  if (msg) toast(msg);
+}
+
+/** 주인: 이 폰의 장부를 공유 시작 (다른 폰에서 이미 공유 중이면 그 장부를 이어서 쓴다) */
+async function startShare() {
+  const { m, fs } = await fbInit();
+  if (!fbUser && !(await signIn())) return;
+  const mine = await m.getDocs(m.query(m.collection(fs, 'households'), m.where('owner', '==', fbUser.uid), m.limit(1)));
+  let hid;
+  if (!mine.empty) {
+    const d = mine.docs[0].data();
+    const n = ((d.data && d.data.policies) || []).length;
+    if (db.policies.length && !confirm(`이 구글 계정으로 이미 공유 중인 장부(보험 ${n}건)가 있어요.\n그 장부를 이 폰으로 불러올까요? 이 폰에만 있던 내용(보험 ${db.policies.length}건)은 사라져요.`)) return;
+    hid = mine.docs[0].id;
+    db = normalize(d.data || {});
+    try { localStorage.setItem(KEY, JSON.stringify(db)); localStorage.setItem(SAVED_AT, String(d.savedAt || Date.now())); } catch {}
+  } else {
+    hid = randomId(20);
+    const at = Date.now();
+    localStorage.setItem(SAVED_AT, String(at));
+    await m.setDoc(m.doc(fs, 'households', hid), {
+      owner: fbUser.uid, ownerName: myName(), viewers: [], viewerInfo: {}, data: plain(db), savedAt: at, updatedAt: m.serverTimestamp(),
+    });
+  }
+  sync = { hid, role: 'owner' };
+  lsSet(SYNC_KEY, sync);
+  render(); listen(); setShareStatus('saved');
+  toast('공유를 시작했어요. 이제 가족에게 초대 링크를 보내세요.');
+}
+async function invite() {
+  const { m, fs } = await fbInit();
+  const code = randomId(22);
+  await m.setDoc(m.doc(fs, 'invites', code), {
+    hid: sync.hid, owner: fbUser.uid, ownerName: myName(), created: m.serverTimestamp(), expires: m.Timestamp.fromMillis(Date.now() + 7 * 864e5),
+  });
+  lastInvite = `${location.origin}${location.pathname}#join=${code}&c=${b64u(JSON.stringify(getCfg()))}`;
+  renderShare();
+  const text = `${myName()}님이 보험 장부를 공유했어요. 링크를 열고 구글로 로그인하면 볼 수 있어요. (7일 안에 열어 주세요)`;
+  if (navigator.share) {
+    try { await navigator.share({ title: '우리집 보험 초대', text, url: lastInvite }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(`${text}\n${lastInvite}`); toast('초대 링크를 복사했어요. 카톡에 붙여넣어 보내세요.'); } catch { toast('아래 링크를 길게 눌러 복사해 보내세요.'); }
+}
+async function removeViewer(vid) {
+  const info = (shareDoc && shareDoc.viewerInfo && shareDoc.viewerInfo[vid]) || {};
+  if (!confirm(`${info.name || info.email || '이 사람'}을(를) 빼면 더 이상 장부를 볼 수 없어요. 뺄까요?`)) return;
+  await fb.m.updateDoc(fb.m.doc(fb.fs, 'households', sync.hid), { viewers: fb.m.arrayRemove(vid), [`viewerInfo.${vid}`]: fb.m.deleteField() });
+  toast('뺐어요.');
+}
+async function stopShare() {
+  if (!confirm('공유를 끌까요? 가족은 더 이상 볼 수 없고, 이 폰의 장부는 그대로 남아요.')) return;
+  await fb.m.deleteDoc(fb.m.doc(fb.fs, 'households', sync.hid));
+  endShare('공유를 껐어요. 이 폰의 장부는 그대로 있어요.');
+}
+
+/** 초대 링크로 들어온 가족: 구글로 로그인 → 초대 코드 확인 → 보는 사람으로 등록 */
+function readJoinHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const code = h.get('join');
+  if (!code) return;
+  const c = h.get('c');
+  if (c && !getCfg()) { try { const cfg = JSON.parse(unb64u(c)); if (validCfg(cfg)) lsSet(CFG_KEY, cfg); } catch {} }
+  pendingJoin = code;
+  history.replaceState(null, '', location.pathname + location.search);
+}
+async function doJoin() {
+  const code = pendingJoin;
+  if (!code) return;
+  const { m, fs } = await fbInit();
+  if (!fbUser && !(await signIn())) return;
+  const inv = await m.getDoc(m.doc(fs, 'invites', code));
+  if (!inv.exists()) throw new Error('초대 링크가 없거나 취소됐어요. 새 링크를 받아 주세요.');
+  const { hid, ownerName, owner, expires } = inv.data();
+  if (owner === fbUser.uid) { pendingJoin = null; renderShare(); toast('내가 만든 초대 링크예요. 가족에게 보내 주세요.'); return; }
+  if (expires && expires.toMillis() < Date.now()) throw new Error('초대 링크가 만료됐어요(7일). 새 링크를 받아 주세요.');
+  if (sync && sync.role === 'owner' && !confirm('이 폰의 장부를 공유하는 중이에요. 이 폰에서 공유를 멈추고 가족 장부를 볼까요? (내 장부와 공유는 그대로 남아요)')) return;
+  const ref = m.doc(fs, 'households', hid);
+  let already = false;
+  try { already = (await m.getDoc(ref)).exists(); } catch { already = false; }
+  if (!already) {
+    await m.updateDoc(ref, {
+      viewers: m.arrayUnion(fbUser.uid),
+      [`viewerInfo.${fbUser.uid}`]: { name: fbUser.displayName || '', email: fbUser.email || '', at: Date.now() },
+      lastJoin: code,
+    });
+  }
+  stopListening();
+  pendingJoin = null;
+  sync = { hid, role: 'viewer', ownerName: ownerName || '가족' };
+  lsSet(SYNC_KEY, sync);
+  RO = true; ui.who = 'all';
+  db = normalize({});
+  applyRO(); render(); listen();
+  if (dlgSh.open) dlgSh.close();
+  toast(`${sync.ownerName}님 장부를 보고 있어요. (보기만)`);
+}
+async function leaveShare() {
+  if (!confirm(`${(sync && sync.ownerName) || '가족'}님 장부를 그만 볼까요? 다시 보려면 새 초대 링크가 필요해요.`)) return;
+  try {
+    await fb.m.updateDoc(fb.m.doc(fb.fs, 'households', sync.hid), { viewers: fb.m.arrayRemove(fbUser.uid), [`viewerInfo.${fbUser.uid}`]: fb.m.deleteField() });
+  } catch {}
+  endShare('내 장부로 돌아왔어요.');
+}
+async function signOutShare() {
+  if (sync && !confirm(sync.role === 'viewer' ? '로그아웃하면 가족 장부를 볼 수 없어요. 내 장부로 돌아갈까요?' : '로그아웃하면 이 폰에서 공유가 멈춰요. (장부와 공유는 그대로 남아요) 로그아웃할까요?')) return;
+  if (sync) endShare(null);
+  await fb.m.signOut(fb.auth);
+  renderShare();
+}
+
+function applyRO() { document.body.classList.toggle('ro', RO); }
+
+/** 맨 위 공유 표시 + 공유 시트 내용 */
+const dlgSh = $('#dlgShare');
+function renderShare() {
+  const bar = $('#syncBar');
+  if (sync && sync.role === 'viewer') { bar.hidden = false; bar.textContent = `👀 ${sync.ownerName || '가족'}님 장부 · 보기만`; }
+  else if (sync && sync.role === 'owner') {
+    const n = shareDoc ? (shareDoc.viewers || []).length : null;
+    bar.hidden = false;
+    bar.textContent = shareStatus && shareStatus.kind === 'error' ? '⚠ 가족 공유 연결 안 됨 · 눌러서 확인' : `☁ 가족과 공유 중${n != null ? ` · 보는 사람 ${n}명` : ''}`;
+  } else bar.hidden = true;
+  $('#footStore').textContent = !sync ? '데이터는 이 기기에만 저장돼요'
+    : sync.role === 'owner' ? '이 기기와 내 Firebase에 저장돼요 (초대한 가족만 볼 수 있어요)' : '가족 장부를 보기만 하는 중이에요';
+  const st = $('#shareState');
+  if (st) st.textContent = !getCfg() ? '아직 설정 전이에요.' : sync ? (sync.role === 'owner' ? '내 장부를 공유하는 중이에요.' : `${sync.ownerName || '가족'}님 장부를 보는 중이에요.`) : '공유하지 않는 중이에요.';
+  if (dlgSh.open) $('#shareIn').innerHTML = shareHTML();
+}
+function shareHTML() {
+  const err = shareStatus && shareStatus.kind === 'error' ? `<p class="err">${esc(shareStatus.msg)}</p>` : '';
+  const who = fbUser ? `<p class="sub">로그인: ${esc(fbUser.email || myName())} · <button type="button" class="link" data-act="shareSignOut">로그아웃</button></p>` : '';
+  const head = '<h2>가족 실시간 공유</h2>';
+  if (!getCfg()) return head + setupHTML() + err;
+  if (pendingJoin) {
+    return `${head}<p class="note">가족이 보험 장부를 공유했어요. 구글로 로그인하면 바로 볼 수 있어요. <b>보기만</b> 할 수 있고, 이 폰에 있던 내 장부는 그대로 남아요.</p>
+      <button type="button" class="btn primary wide big" data-act="joinShare">구글로 로그인하고 보기</button>${err}
+      <button type="button" class="btn wide" data-act="cancelJoin">나중에</button>`;
+  }
+  if (sync && sync.role === 'viewer') {
+    return `${head}<p class="note">👀 <b>${esc(sync.ownerName || '가족')}</b>님 장부를 보는 중이에요. <b>보기만</b> 할 수 있어요. 바뀌면 자동으로 반영돼요.</p>
+      <p class="note">이 폰에 있던 내 장부는 그대로 있어요.</p>${err}
+      <button type="button" class="btn wide" data-act="leaveShare">그만 보기 · 내 장부로 돌아가기</button>${who}`;
+  }
+  if (sync && sync.role === 'owner') {
+    const vs = (shareDoc && shareDoc.viewers) || [];
+    const info = (shareDoc && shareDoc.viewerInfo) || {};
+    const saved = shareStatus && shareStatus.kind === 'saved' ? ` · ${pad(shareStatus.at.getHours())}:${pad(shareStatus.at.getMinutes())} 저장됨` : '';
+    return `${head}<p class="note ok-line">☁ 내 장부를 공유하는 중${saved}. 고치면 바로 가족 폰에도 반영돼요.</p>${err}
+      <h3>보는 사람 ${vs.length}명 <small>(보기만)</small></h3>
+      ${vs.length ? vs.map((v) => `<div class="mrow viewer"><i></i><b>${esc((info[v] && (info[v].name || info[v].email)) || '가족')}</b><small>${esc((info[v] && info[v].email) || '')}</small><button type="button" class="link danger-link" data-act="removeViewer" data-vid="${esc(v)}">빼기</button></div>`).join('')
+        : '<p class="sub">아직 없어요. 아래 초대 링크를 보내세요.</p>'}
+      <button type="button" class="btn primary wide big" data-act="invite">＋ 가족 초대 링크 보내기<small>링크는 7일 동안 쓸 수 있어요 · 받은 사람은 보기만</small></button>
+      ${lastInvite ? `<p class="sub">방금 만든 링크 (길게 눌러 복사):</p><p class="invite-url">${esc(lastInvite)}</p>` : ''}
+      <button type="button" class="btn wide danger" data-act="stopShare">공유 끄기</button>${who}`;
+  }
+  if (!fbUser) {
+    return `${head}<p class="note">구글 계정으로 로그인한 뒤 ‘공유 시작’을 누르면, 초대한 가족이 이 장부를 볼 수 있어요.</p>${err}
+      <button type="button" class="btn primary wide big" data-act="shareSignIn">구글로 로그인</button>
+      <button type="button" class="link" data-act="resetCfg">Firebase 설정 다시 넣기</button>`;
+  }
+  return `${head}<p class="note">이 폰의 보험 장부를 가족과 공유해요. 공유를 시작한 뒤 초대 링크를 보내면, 받은 사람은 <b>보기만</b> 할 수 있어요.</p>${err}
+    <button type="button" class="btn primary wide big" data-act="startShare">내 장부 공유 시작</button>${who}`;
+}
+function setupHTML() {
+  return `<p class="note">가족을 초대해서 같은 보험 장부를 함께 봐요(초대받은 사람은 <b>보기만</b>). 무료인 Google <b>Firebase</b>에 장부를 올려서 공유해요. 처음 한 번만 아래 설정을 해 주세요. 폰에서는 크롬 메뉴의 <b>데스크톱 사이트</b>를 켜면 편해요.</p>
+    <ol class="steps">
+      <li><a href="https://console.firebase.google.com" target="_blank" rel="noopener">Firebase 콘솔 ↗</a>에서 구글 계정으로 <b>프로젝트 만들기</b> (이름은 아무거나, 애널리틱스는 꺼도 돼요)</li>
+      <li>왼쪽 <b>빌드 → Authentication → 시작하기</b> → 로그인 방법에서 <b>Google</b>을 사용 설정 → 저장</li>
+      <li>Authentication의 <b>설정 → 승인된 도메인 → 도메인 추가</b>에 <code>${esc(location.host)}</code> 넣기 <button type="button" class="link" data-act="copyDomain">복사</button></li>
+      <li><b>빌드 → Firestore Database → 데이터베이스 만들기</b> → 위치 <b>asia-northeast3 (서울)</b> → <b>프로덕션 모드</b></li>
+      <li>Firestore의 <b>규칙</b> 탭 → 내용을 지우고 붙여넣기 → <b>게시</b> <button type="button" class="link" data-act="copyRules">규칙 복사</button></li>
+      <li>톱니바퀴 <b>프로젝트 설정 → 내 앱 → 웹(&lt;/&gt;)</b> → 앱 등록 → 나오는 <code>firebaseConfig</code> 부분을 복사해 아래에 붙여넣기</li>
+    </ol>
+    <label>Firebase 설정 붙여넣기<textarea id="fbcfg" rows="6" placeholder='const firebaseConfig = { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." };'></textarea></label>
+    <button type="button" class="btn primary wide" data-act="saveCfg">저장</button>`;
+}
+async function openShare() {
+  shareStatus = shareStatus && shareStatus.kind === 'error' ? shareStatus : shareStatus;
+  if ($('#dlgSettings').open) $('#dlgSettings').close();
+  $('#shareIn').innerHTML = shareHTML();
+  dlgSh.showModal();
+  if (getCfg() && !fb) { try { await fbInit(); renderShare(); } catch (e) { setShareStatus('error', e); } } // 미리 불러 두면 로그인 창이 덜 막힌다
+}
+/** 공유 버튼들: 실패하면 시트에 이유를 보여 준다 */
+const shareAct = (fn) => async (t) => {
+  try { shareStatus = null; renderShare(); await fn(t); } catch (e) { setShareStatus('error', e); }
+};
+async function copyText(text, done) {
+  try { await navigator.clipboard.writeText(text); toast(done); } catch { prompt('길게 눌러 복사하세요', text); }
+}
+
+// 앱이 열려 있을 때 초대 링크를 눌러도 처리한다
+window.addEventListener('hashchange', () => { readJoinHash(); if (pendingJoin) openShare(); });
+
+/** 앱을 열 때: 초대 링크 처리, 공유 중이면 연결 */
+async function bootShare() {
+  readJoinHash();
+  applyRO(); renderShare();
+  if (pendingJoin) { openShare(); return; }
+  if (!sync || !getCfg()) return;
+  try {
+    await fbInit();
+    if (fbUser) listen(); else setShareStatus('error', { code: '', message: '다시 로그인해야 공유가 이어져요.' });
+  } catch (e) { setShareStatus('error', e); }
+}
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
@@ -1527,6 +1874,24 @@ const actions = {
   addAlarmHere: () => { if (editing) openAlarm(null, editing.id); },
   deleteAlarm,
   movePolicy: () => { if (editing) openMove(editing.id); },
+  openShare,
+  saveCfg: () => {
+    const cfg = parseCfg($('#fbcfg').value);
+    if (!cfg) { setShareStatus('error', { message: 'apiKey, authDomain, projectId, appId 가 들어 있는 firebaseConfig 를 붙여넣어 주세요.' }); return; }
+    lsSet(CFG_KEY, cfg); fb = null; shareStatus = null; renderShare(); openShare();
+  },
+  resetCfg: () => { if (confirm('Firebase 설정을 지우고 다시 넣을까요?')) { lsSet(CFG_KEY, null); fb = null; fbUser = null; renderShare(); } },
+  copyDomain: () => copyText(location.host, '도메인을 복사했어요.'),
+  copyRules: async () => { try { const r = await fetch('./firestore.rules'); await copyText(await r.text(), '규칙을 복사했어요. Firestore 규칙 탭에 붙여넣고 게시하세요.'); } catch { toast('규칙을 불러오지 못했어요. 인터넷 연결을 확인해 주세요.'); } },
+  shareSignIn: shareAct(async () => { await signIn(); renderShare(); }),
+  shareSignOut: shareAct(signOutShare),
+  startShare: shareAct(startShare),
+  invite: shareAct(invite),
+  removeViewer: shareAct((t) => removeViewer(t.dataset.vid)),
+  stopShare: shareAct(stopShare),
+  joinShare: shareAct(doJoin),
+  cancelJoin: () => { pendingJoin = null; dlgSh.close(); },
+  leaveShare: shareAct(leaveShare),
   markCancelled: () => {
     if (!editing || !confirm(`‘${editing.name}’을(를) 이번 달에 해지한 것으로 할까요?\n합계에서 빠지고 ‘해지한 보험’으로 옮겨요.`)) return;
     editing.cancel = ymStr(NOW); editing.cancelPlan = '';
@@ -1565,10 +1930,20 @@ const actions = {
   },
 };
 
+// 보기만 하는 중에는 막는 버튼들 (캘린더에 넣기 · 내보내기 · 공유 화면은 된다)
+const MUTATE = new Set(['add', 'scan', 'pickPhoto', 'pasteMode', 'editText', 'parsePaste', 'saveScan', 'calcRemain', 'deletePolicy',
+  'addMember', 'deleteMember', 'addClaim', 'addClaimHere', 'deleteClaim', 'addAlarm', 'addAlarmHere', 'deleteAlarm',
+  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe']);
+
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto]');
   if (!t) return;
   if (t.hasAttribute('data-close')) { t.closest('dialog').close(); return; }
+  if (RO && ((t.dataset.act && MUTATE.has(t.dataset.act)) || t.dataset.move || t.dataset.moveto || t.dataset.member
+    || t.dataset.claim || t.dataset.alarm || t.dataset.years || t.dataset.preset || t.dataset.memo)) {
+    toast('보기만 할 수 있어요. 고치는 건 장부 주인만 할 수 있어요.');
+    return;
+  }
   if (t.dataset.who) { ui.who = t.dataset.who; saveUI(); render(); return; }
   if (t.dataset.view) { ui.view = t.dataset.view; saveUI(); render(); return; }
   if (t.dataset.years) { $('#p-years').value = t.dataset.years; fromYears(); return; }
@@ -1619,4 +1994,5 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && no
 function persist() { if (db.policies.length && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); }
 
 render();
+bootShare();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
