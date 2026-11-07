@@ -21,6 +21,7 @@
     <button class="icon" data-act="settings" aria-label="설정">⚙</button>
   </header>
 
+  <button type="button" class="syncbar" id="syncBar" data-act="openShare" hidden></button>
   <div id="alarmBanner"></div>
   <nav class="chips" id="chips" aria-label="누구 보험 볼지"></nav>
   <section id="summary"></section>
@@ -39,7 +40,7 @@
   </div>
   <section id="cancelled"></section>
 
-  <p class="foot">데이터는 이 기기에만 저장돼요 · <button class="link" data-act="settings">백업·가족 공유</button></p>
+  <p class="foot"><span id="footStore">데이터는 이 기기에만 저장돼요</span> · <button class="link" data-act="settings">백업·가족 공유</button></p>
 </main>
 
 <button class="fab" data-act="add">＋ 보험 추가</button>
@@ -199,6 +200,14 @@
 </div>
 </dialog>
 
+<!-- 가족 실시간 공유 -->
+<dialog id="dlgShare" class="sheet">
+<div class="in">
+  <div id="shareIn"></div>
+  <button type="button" class="btn wide" data-close>닫기</button>
+</div>
+</dialog>
+
 <!-- 가족 추가/수정 -->
 <dialog id="dlgMember" class="sheet">
 <form id="fMember" novalidate>
@@ -222,6 +231,10 @@
   <h3>가족</h3>
   <div id="memberList"></div>
   <button class="btn wide" data-act="addMember">＋ 가족 추가</button>
+
+  <h3>가족 실시간 공유</h3>
+  <p class="note">가족을 초대하면 같은 장부를 함께 볼 수 있어요. 초대받은 사람은 보기만 해요. <span id="shareState"></span></p>
+  <button class="btn wide" data-act="openShare">가족 실시간 공유 열기 ›</button>
 
   <h3>백업 · 가족과 같이 보기</h3>
   <p class="note">데이터는 이 기기에만 저장돼요. 백업 파일을 카톡 등으로 보내고 다른 폰에서 ‘불러오기’를 누르면 같은 화면을 볼 수 있어요.</p>
