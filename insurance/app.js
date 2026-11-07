@@ -410,7 +410,7 @@ function cardHTML(p) {
     <div class="pol-head">
       <span class="ava" aria-hidden="true">${esc([...(p.insurer || '?')].slice(0, 2).join(''))}</span>
       <span class="pol-t"><b>${esc(p.name)}</b><small>${esc(p.insurer)} · ${esc(p.type)}${p.cover ? ` · 보장 ${esc(p.cover)}` : ''}</small>${p.product ? `<small>${esc(p.product)}</small>` : ''}</span>
-      ${multi ? `<span class="who">${esc(m.name)}</span>` : ''}
+      ${multi ? `<span class="who" data-move="${p.id}" role="button" tabindex="0" aria-label="${esc(m.name)} 보험 · 다른 사람으로 옮기기">${esc(m.name)} ⇄</span>` : ''}
     </div>
     <div class="pol-row"><span>${p.cycle === 'Y' ? '연' : '월'} 보험료</span><b>${won(p.premium)}원</b></div>
     <div class="pol-period"><span>${period}</span><span>${when}</span></div>
@@ -529,6 +529,7 @@ function openPolicy(id) {
   $('#p-helper').open = false;
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
+  $('#pMove').hidden = !editing;
   renderPolicyAlarms();
   $('#p-stats').hidden = !editing;
   if (editing) { const k = calc(editing); $('#p-stats').innerHTML = amountBoxes(editing, k); }
@@ -721,6 +722,7 @@ $('#fMember').addEventListener('submit', (e) => {
   else { id = uid(); db.members.push({ id, name, birth: b || null, slot: nextSlot() }); }
   save(); dlgM.close();
   if (dlgP.open) { const cur = ($('input[name=who]:checked') || {}).value; whoPicker(editingM ? cur : id); }
+  if (dlgMv.open) renderMove();
   if ($('#dlgSettings').open) renderMembers();
   render();
 });
@@ -1478,6 +1480,34 @@ function renderPolicyAlarms() {
 }
 $('#a-repeat').addEventListener('change', syncRepeat);
 
+/* ── 다른 사람 보험으로 옮기기 ── (받은 보험금·알림은 보험에 붙어 있어서 같이 옮겨진다) */
+let moving = null;
+const dlgMv = $('#dlgMove');
+function openMove(pid) {
+  moving = db.policies.find((p) => p.id === pid) || null;
+  if (!moving) return;
+  renderMove();
+  dlgMv.showModal();
+}
+function renderMove() {
+  if (!moving) return;
+  $('#mvTitle').textContent = `‘${moving.name}’ 누구 보험으로 옮길까요?`;
+  $('#mvList').innerHTML = db.members.map((m) => {
+    const cur = m.id === moving.who;
+    const n = db.policies.filter((p) => p.who === m.id).length;
+    return `<button type="button" class="mrow${cur ? ' cur' : ''}" ${cur ? 'disabled' : `data-moveto="${m.id}"`} style="--c:var(--m${m.slot})">
+      <i></i><b>${esc(m.name)}</b><small>${m.birth ? `${m.birth}년생 · ` : ''}보험 ${n}건</small><span>${cur ? '지금' : '옮기기 ›'}</span></button>`;
+  }).join('');
+}
+function movePolicy(toId) {
+  const to = db.members.find((m) => m.id === toId);
+  if (!moving || !to || moving.who === toId) return;
+  moving.who = toId;
+  save(); dlgMv.close(); render();
+  if (dlgP.open && editing === moving) whoPicker(toId); // 열려 있는 보험 화면도 맞춘다 (저장해도 되돌아가지 않게)
+  toast(`‘${moving.name}’을(를) ${to.name} 보험으로 옮겼어요.`);
+}
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
@@ -1496,6 +1526,7 @@ const actions = {
   addAlarm: () => openAlarm(null, ui.who !== 'all' ? (db.policies.find((p) => p.who === ui.who) || {}).id : ''),
   addAlarmHere: () => { if (editing) openAlarm(null, editing.id); },
   deleteAlarm,
+  movePolicy: () => { if (editing) openMove(editing.id); },
   markCancelled: () => {
     if (!editing || !confirm(`‘${editing.name}’을(를) 이번 달에 해지한 것으로 할까요?\n합계에서 빠지고 ‘해지한 보험’으로 옮겨요.`)) return;
     editing.cancel = ymStr(NOW); editing.cancelPlan = '';
@@ -1535,13 +1566,15 @@ const actions = {
 };
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset]');
+  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto]');
   if (!t) return;
   if (t.hasAttribute('data-close')) { t.closest('dialog').close(); return; }
   if (t.dataset.who) { ui.who = t.dataset.who; saveUI(); render(); return; }
   if (t.dataset.view) { ui.view = t.dataset.view; saveUI(); render(); return; }
   if (t.dataset.years) { $('#p-years').value = t.dataset.years; fromYears(); return; }
   if (t.dataset.member) { openMember(t.dataset.member); return; }
+  if (t.dataset.move) { openMove(t.dataset.move); return; }
+  if (t.dataset.moveto) { movePolicy(t.dataset.moveto); return; }
   if (t.dataset.claim) { openClaim(t.dataset.claim); return; }
   if (t.dataset.ics) { const a = (db.alarms || []).find((x) => x.id === t.dataset.ics); if (a) downloadIcs([a]); return; }
   if (t.dataset.alarm) { openAlarm(t.dataset.alarm); return; }
@@ -1551,7 +1584,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.id) openPolicy(t.dataset.id);
 });
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-id],[role=button][data-claim],[role=button][data-act],[role=button][data-alarm],[role=button][data-ics]')) { e.preventDefault(); e.target.click(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-move],[role=button][data-id],[role=button][data-claim],[role=button][data-act],[role=button][data-alarm],[role=button][data-ics]')) { e.preventDefault(); e.target.click(); }
 });
 // 시트 바깥(어두운 부분)을 누르면 닫기
 $$('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));

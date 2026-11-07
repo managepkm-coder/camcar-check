@@ -50,6 +50,7 @@
   <h2 id="pTitle">보험 추가</h2>
   <div class="pol-amts pstats" id="p-stats" hidden></div>
   <div class="cplan" id="p-cplan" hidden></div>
+  <button type="button" class="btn wide movebtn" data-act="movePolicy" id="pMove" hidden>⇄ 다른 사람 보험으로 옮기기</button>
   <button type="button" class="btn scanbtn" id="pScan" data-act="scan">📷 사진으로 한 번에 등록<small>보험 앱 캡처 · 보험증권 · 손글씨는 글자 붙여넣기 (무료)</small></button>
 
   <fieldset>
@@ -185,6 +186,17 @@
     <button type="button" class="btn wide" data-close>닫기</button>
   </section>
 </form>
+</dialog>
+
+<!-- 다른 사람 보험으로 옮기기 -->
+<dialog id="dlgMove" class="sheet">
+<div class="in">
+  <h2 id="mvTitle">누구 보험으로 옮길까요?</h2>
+  <p class="note">받은 보험금과 알림도 같이 옮겨져요.</p>
+  <div id="mvList"></div>
+  <button type="button" class="btn wide" data-act="addMember">＋ 새 가족 추가</button>
+  <button type="button" class="btn wide" data-close>닫기</button>
+</div>
 </dialog>
 
 <!-- 가족 추가/수정 -->
