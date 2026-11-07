@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0e" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="보험">
+<title>우리집 보험</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon.svg">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<main class="app">
+  <header class="top">
+    <h1>우리집 보험</h1>
+    <button class="icon" data-act="settings" aria-label="설정">⚙</button>
+  </header>
+
+  <button type="button" class="syncbar" id="syncBar" data-act="openShare" hidden></button>
+  <div id="alarmBanner"></div>
+  <nav class="chips" id="chips" aria-label="누구 보험 볼지"></nav>
+  <section id="summary"></section>
+
+  <div class="seg" id="seg" role="tablist">
+    <button role="tab" data-view="timeline">납입기간 한눈에</button>
+    <button role="tab" data-view="list">보험별 상세</button>
+  </div>
+
+  <section id="content"></section>
+  <div class="duo">
+    <section id="alarms"></section>
+    <section id="claims"></section>
+    <section id="events"></section>
+    <section id="payouts"></section>
+  </div>
+  <section id="cancelled"></section>
+
+  <p class="foot"><span id="footStore">데이터는 이 기기에만 저장돼요</span> · <button class="link" data-act="settings">백업·가족 공유</button></p>
+</main>
+
+<button class="fab" data-act="add">＋ 보험 추가</button>
+
+<!-- 보험 추가/수정 -->
+<dialog id="dlgPolicy" class="sheet">
+<form id="fPolicy" novalidate>
+  <h2 id="pTitle">보험 추가</h2>
+  <div class="pol-amts pstats" id="p-stats" hidden></div>
+  <div class="cplan" id="p-cplan" hidden></div>
+  <button type="button" class="btn wide movebtn" data-act="movePolicy" id="pMove" hidden>⇄ 다른 사람 보험으로 옮기기</button>
+  <button type="button" class="btn scanbtn" id="pScan" data-act="scan">📷 사진으로 한 번에 등록<small>보험 앱 캡처 · 보험증권 · 손글씨는 글자 붙여넣기 (무료)</small></button>
+
+  <fieldset>
+    <legend>누구 보험인가요? <small>(보장받는 사람)</small></legend>
+    <div class="pick" id="p-who"></div>
+  </fieldset>
+
+  <div class="grid2">
+    <label>보험사<input id="p-insurer" list="insurerList" autocomplete="off" placeholder="예: 교보생명"></label>
+    <label>종류<select id="p-type"></select></label>
+  </div>
+  <label>보험 이름 <small>짧게 · 비우면 자동</small><input id="p-name" maxlength="20" placeholder="예: 교보 변액연금"></label>
+  <label>정식 상품명 <small>선택</small><input id="p-product" placeholder="증권에 적힌 상품명"></label>
+
+  <div class="grid2">
+    <label>납입액 <small>매달(연납이면 매년)</small><input id="p-premium" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="p-premium-hint"></small></label>
+    <label>납입 주기<select id="p-cycle"><option value="M">월납</option><option value="Y">연납</option></select></label>
+  </div>
+  <div class="grid2">
+    <label>일시납 <small>처음에 한 번 · 선택</small><input id="p-lump" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="p-lump-hint"></small></label>
+    <label>일시납한 날 <small>비우면 납입 시작일</small><input id="p-lumpDate" type="date"></label>
+  </div>
+
+  <div class="grid2">
+    <label>납입 시작 <small>계약일 · 모르면 비움</small><input id="p-start" type="date" placeholder="2018-03-15"></label>
+    <label>납입 기간<span class="unit"><input id="p-years" type="number" inputmode="decimal" min="0" step="any" placeholder="20">년</span></label>
+  </div>
+  <div class="quick" aria-label="납입 기간 빠른 선택">
+    <button type="button" data-years="5">5년</button><button type="button" data-years="10">10년</button><button type="button" data-years="15">15년</button><button type="button" data-years="20">20년</button><button type="button" data-years="30">30년</button>
+  </div>
+  <div class="grid2">
+    <label>납입 끝 <small>마지막 내는 달</small><input id="p-end" type="month" placeholder="2038-02"></label>
+    <label class="check"><input id="p-open" type="checkbox"><span>갱신형 · 끝 없음<small>실손처럼 계속 내는 보험</small></span></label>
+  </div>
+  <label>해지할 날짜 <small>선택 · 적어 두면 일주일 전과 그날 알려 드려요</small><input id="p-cancelPlan" type="date"></label>
+
+  <details class="helper" id="p-helper">
+    <summary>보험 앱에 ‘○% 납부 · ○원 남음’만 보이나요?</summary>
+    <p class="note">토스·뱅크샐러드·보험사 앱에 나오는 두 숫자를 넣으면 납입 시작과 끝을 계산해 채워 드려요. 위의 납입액을 먼저 넣으세요.</p>
+    <div class="grid2">
+      <label>납부율<span class="unit"><input id="h-pct" inputmode="decimal" placeholder="34.4">%</span></label>
+      <label>남은 금액<input id="h-remain" class="money" inputmode="numeric" placeholder="17,593,480"></label>
+    </div>
+    <button type="button" class="btn" data-act="calcRemain">계산해서 채우기</button>
+    <p class="hint" id="h-out"></p>
+  </details>
+
+  <details class="more" id="p-more">
+    <summary>보장 만기 · 연금 받기 · 해지 · 메모</summary>
+    <div class="grid2">
+      <label>보장 만기<input id="p-cover" placeholder="예: 100세, 종신"></label>
+      <label>이체일<span class="unit"><input id="p-payday" type="number" inputmode="numeric" min="1" max="31" placeholder="25">일</span></label>
+    </div>
+    <p class="sub">연금·만기금을 받는 보험이면</p>
+    <div class="grid3">
+      <label>받기 시작<input id="p-payStart" type="month" placeholder="2036-01"></label>
+      <label>기간<span class="unit"><input id="p-payYears" type="number" inputmode="numeric" min="0" placeholder="종신">년</span></label>
+      <label>월 수령액<input id="p-payAmt" class="money" inputmode="numeric" placeholder="0"></label>
+    </div>
+    <label>해지한 달 <small>넣으면 합계에서 빠지고 아래 ‘해지한 보험’으로 가요</small><input id="p-cancel" type="month" placeholder="2020-01"></label>
+    <label>메모<textarea id="p-memo" rows="2" placeholder="예: 자동이체 할인 -300원, 카드 5% 할인"></textarea></label>
+  </details>
+
+  <div class="pclaims" id="p-alarms" hidden></div>
+  <div class="pclaims" id="p-claims" hidden></div>
+
+  <p class="err" id="p-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deletePolicy" id="pDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 받은 보험금 기록 -->
+<dialog id="dlgClaim" class="sheet">
+<form id="fClaim" novalidate>
+  <h2 id="cTitle">받은 보험금 기록</h2>
+  <label>어느 보험에서 받았나요?<select id="c-policy"></select></label>
+  <div class="grid2">
+    <label>받은 날<input id="c-date" type="date"></label>
+    <label>받은 금액<input id="c-amount" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="c-amount-hint"></small></label>
+  </div>
+  <label>내용 <small>선택</small><input id="c-memo" maxlength="30" placeholder="예: 실손 병원비, 입원비, 암 진단금"></label>
+  <div class="quick" aria-label="내용 빠른 선택">
+    <button type="button" data-memo="실손 병원비">실손 병원비</button><button type="button" data-memo="통원">통원</button><button type="button" data-memo="입원비">입원비</button><button type="button" data-memo="수술비">수술비</button><button type="button" data-memo="진단금">진단금</button><button type="button" data-memo="만기·해지 환급금">환급금</button>
+  </div>
+  <p class="err" id="c-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deleteClaim" id="cDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 알림 -->
+<dialog id="dlgAlarm" class="sheet">
+<form id="fAlarm" novalidate>
+  <section data-astep="form">
+    <h2 id="aTitle">알림 만들기</h2>
+    <label>어느 보험? <small>선택</small><select id="a-policy"></select></label>
+    <p class="sub">빠른 선택 <small>(보험을 먼저 고르면 날짜도 채워져요)</small></p>
+    <div class="quick">
+      <button type="button" data-preset="cancel">해지할 날</button><button type="button" data-preset="renew">갱신일</button><button type="button" data-preset="end">납입 끝나는 날</button><button type="button" data-preset="claim">보험금 청구</button><button type="button" data-preset="pension">연금 받기 시작</button>
+    </div>
+    <input type="hidden" id="a-kind">
+    <label>무슨 알림? <input id="a-title" maxlength="40" placeholder="예: 해지하기, 갱신일, 실손 청구하기"></label>
+    <div class="grid2">
+      <label>날짜<input id="a-date" type="date"></label>
+      <label>시각<input id="a-time" type="time" value="09:00"></label>
+    </div>
+    <div class="grid2">
+      <label>반복<select id="a-repeat"><option value="none">한 번만</option><option value="month">매달</option><option value="year">매년</option></select></label>
+      <label>미리 알림<select id="a-before"><option value="0">그 시각에</option><option value="1">하루 전</option><option value="3">3일 전</option><option value="7">일주일 전</option></select></label>
+    </div>
+    <label id="a-until-wrap">반복 끝 <small>선택 · 이 날까지만 반복</small><input id="a-until" type="date"></label>
+    <label>메모 <small>선택</small><input id="a-memo" maxlength="100" placeholder="예: 통장 잔고 확인"></label>
+    <p class="err" id="a-err" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn danger" data-act="deleteAlarm" id="aDel">삭제</button>
+      <button type="button" class="btn" data-close>취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </section>
+
+  <section data-astep="cal" hidden>
+    <h2 id="a-cal-title">저장했어요</h2>
+    <p class="note" id="a-saved"></p>
+    <div class="howto">
+      <b>폰 알림을 받으려면 캘린더에 넣어 주세요</b>
+      <p>이 앱은 닫혀 있을 때 직접 알림을 보낼 수 없어서, 폰 캘린더가 대신 알려 줘요. 한 번만 넣으면 반복 알림도 계속 와요.</p>
+    </div>
+    <button type="button" class="btn primary wide big" data-act="icsOne">📅 삼성 캘린더 등에 넣기<small>파일을 받은 뒤 알림창에서 ‘열기’ → 캘린더 선택 → 저장</small></button>
+    <a class="btn wide big" id="a-gcal" href="#" target="_blank" rel="noopener">Google 캘린더로 열기<small>열린 화면에서 ‘저장’ (알림은 구글 캘린더 기본 설정)</small></a>
+    <button type="button" class="btn wide" data-close>닫기</button>
+  </section>
+</form>
+</dialog>
+
+<!-- 다른 사람 보험으로 옮기기 -->
+<dialog id="dlgMove" class="sheet">
+<div class="in">
+  <h2 id="mvTitle">누구 보험으로 옮길까요?</h2>
+  <p class="note">받은 보험금과 알림도 같이 옮겨져요.</p>
+  <div id="mvList"></div>
+  <button type="button" class="btn wide" data-act="addMember">＋ 새 가족 추가</button>
+  <button type="button" class="btn wide" data-close>닫기</button>
+</div>
+</dialog>
+
+<!-- 가족 실시간 공유 -->
+<dialog id="dlgShare" class="sheet">
+<div class="in">
+  <div id="shareIn"></div>
+  <button type="button" class="btn wide" data-close>닫기</button>
+</div>
+</dialog>
+
+<!-- 가족 추가/수정 -->
+<dialog id="dlgMember" class="sheet">
+<form id="fMember" novalidate>
+  <h2 id="mTitle">가족 추가</h2>
+  <label>이름 또는 관계<input id="m-name" maxlength="12" placeholder="예: 아내, 첫째, 엄마"></label>
+  <label>출생 연도 <small>선택 · 타임라인에 나이를 표시해요</small><input id="m-birth" inputmode="numeric" maxlength="4" placeholder="예: 1982"></label>
+  <p class="err" id="m-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deleteMember" id="mDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 설정 -->
+<dialog id="dlgSettings" class="sheet">
+<div class="in">
+  <h2>설정</h2>
+
+  <h3>가족</h3>
+  <div id="memberList"></div>
+  <button class="btn wide" data-act="addMember">＋ 가족 추가</button>
+
+  <h3>가족 실시간 공유</h3>
+  <p class="note">가족을 초대하면 같은 장부를 함께 볼 수 있어요. 초대받은 사람은 보기만 해요. <span id="shareState"></span></p>
+  <button class="btn wide" data-act="openShare">가족 실시간 공유 열기 ›</button>
+
+  <h3>백업 · 가족과 같이 보기</h3>
+  <p class="note">데이터는 이 기기에만 저장돼요. 백업 파일을 카톡 등으로 보내고 다른 폰에서 ‘불러오기’를 누르면 같은 화면을 볼 수 있어요.</p>
+  <div class="btns">
+    <button class="btn" data-act="exportJson">백업 파일 저장</button>
+    <button class="btn" data-act="import">불러오기</button>
+  </div>
+  <div class="btns">
+    <button class="btn" data-act="exportCsv">엑셀(CSV)로 저장</button>
+    <button class="btn" data-act="csvTemplate">엑셀 입력 양식</button>
+  </div>
+
+  <h3>보험 목록 자동으로 불러오기?</h3>
+  <p class="note">
+    뱅크샐러드·토스는 금융위원회 <b>마이데이터 허가</b>를 받은 회사만 쓸 수 있는 통로로 보험사 데이터를 받아와요.
+    개인이 만든 앱은 이 통로를 쓸 수 없어서 자동 연동은 안 돼요. 대신
+  </p>
+  <ol class="note">
+    <li><a href="https://www.credit4u.or.kr" target="_blank" rel="noopener">내보험다보여(신용정보원) ↗</a>에서 본인 명의 보험을 한 번에 조회해 옮겨 적기 (가족은 각자 본인인증)</li>
+    <li>보험 앱 화면이나 보험증권을 ‘사진으로 등록’ (폰 안에서 무료로 글자 인식)</li>
+    <li>보험 앱의 ‘○% 납부 · ○원 남음’ 숫자로 납입기간 계산하기 (보험 추가 화면)</li>
+    <li>엑셀 양식에 한꺼번에 적어서 ‘불러오기’</li>
+  </ol>
+
+  <h3>기타</h3>
+  <div class="btns">
+    <button class="btn" data-act="sample">예시 데이터 보기</button>
+    <button class="btn danger" data-act="wipe">모두 지우기</button>
+  </div>
+  <button class="btn wide" data-close>닫기</button>
+</div>
+</dialog>
+
+<!-- 사진으로 등록 (무료 · 폰 안에서 글자 인식) -->
+<dialog id="dlgScan" class="sheet">
+<div class="in">
+  <section data-step="choose">
+    <h2>사진으로 등록</h2>
+    <p class="note">보험 앱 캡처나 보험증권처럼 <b>인쇄된 글자</b>는 폰 안에서 바로 읽어요. 무료이고 사진은 밖으로 나가지 않아요.</p>
+    <button type="button" class="btn primary wide big" data-act="pickPhoto">📷 사진 고르기<small>보험 앱 캡처 · 보험증권 · 한 번에 5장까지</small></button>
+    <button type="button" class="btn wide big" data-act="pasteMode">📋 글자 붙여넣기<small>손글씨 사진 · 다른 앱에서 복사한 글자 · 엑셀 표</small></button>
+    <p class="note small">처음 한 번은 한글 인식 데이터(약 5MB)를 내려받아요. 와이파이에서 하시는 걸 권해요.</p>
+    <button type="button" class="btn wide" data-close>닫기</button>
+  </section>
+
+  <section data-step="paste" hidden>
+    <h2>글자 붙여넣기</h2>
+    <p class="note">손글씨는 폰 글자 인식이 잘 못 읽어요. 아래 중 편한 방법으로 글자를 복사해 붙여넣으면 보험을 찾아 드려요.</p>
+    <ol class="note">
+      <li><b>삼성 갤러리</b>: 사진 열기 → 오른쪽 아래 <b>T</b>(텍스트 추출) → 모두 선택 → 복사</li>
+      <li><b>Google 렌즈</b>: 사진에서 <b>텍스트</b> → 모두 선택 → 복사</li>
+      <li><b>Claude 앱</b>(구독 중이면 추가 비용 없음): <button type="button" class="link" data-act="copyPrompt">요청문 복사</button> → Claude 앱에 사진과 함께 보내기 → 받은 표를 복사</li>
+    </ol>
+    <textarea id="s-text" rows="8" placeholder="여기에 붙여넣기"></textarea>
+    <div class="actions">
+      <button type="button" class="btn" data-act="scanMore">뒤로</button>
+      <button type="button" class="btn primary" data-act="parsePaste">보험 찾기</button>
+    </div>
+  </section>
+
+  <section data-step="busy" hidden>
+    <h2>사진 읽는 중</h2>
+    <div class="thumbs" id="s-thumbs"></div>
+    <div class="spin" aria-hidden="true"></div>
+    <p class="note center" id="s-busy-msg" aria-live="polite"></p>
+    <button type="button" class="btn wide" data-act="cancelScan">취소</button>
+  </section>
+
+  <section data-step="review" hidden>
+    <h2 id="s-title"></h2>
+    <p class="note" id="s-note"></p>
+    <div id="s-rows"></div>
+    <details class="rawtext"><summary>읽은 글자 보기</summary><pre id="s-raw"></pre></details>
+    <p class="err" id="s-err" role="alert"></p>
+    <div class="actions sticky">
+      <button type="button" class="btn" data-act="editText">글자 고치기</button>
+      <button type="button" class="btn primary" data-act="saveScan" id="s-save">등록</button>
+    </div>
+  </section>
+
+  <section data-step="error" hidden>
+    <h2>사진을 읽지 못했어요</h2>
+    <p class="note pre" id="s-error-msg"></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>닫기</button>
+      <button type="button" class="btn primary" data-act="scanMore">다시 하기</button>
+    </div>
+  </section>
+</div>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+<input type="file" id="scanFile" accept="image/*" multiple hidden>
+<datalist id="insurerList"></datalist>
+<input type="file" id="fileIn" accept=".json,.csv,application/json,text/csv" hidden>
+
+<script src="./app.js"></script>
+</body>
+</html>
