@@ -99,6 +99,22 @@
     <p class="hint" id="h-out"></p>
   </details>
 
+  <div class="pclaims" id="p-history" hidden></div>
+
+  <details class="more" id="p-savbox">
+    <summary>저축 · 적립금 <small>연금·저축보험</small></summary>
+    <label class="check sm"><input id="p-saving" type="checkbox"><span>저축되는 보험이에요<small>쌓이는 적립금을 계산해서 보여 줘요</small></span></label>
+    <div class="grid2">
+      <label>연 이율 <small>공시이율 등</small><span class="unit"><input id="p-rate" type="number" inputmode="decimal" step="0.1" min="0" placeholder="2.5">%</span></label>
+      <label>적립 비율 <small>사업비 빼고</small><span class="unit"><input id="p-ratio" type="number" inputmode="decimal" step="1" min="0" max="100" placeholder="95">%</span></label>
+    </div>
+    <p class="sub">보험사 앱에서 본 <b>적립금(해지환급금)</b>을 넣으면 그 값에서 시작해서 훨씬 정확해요. 수익률이 오르내리는 <b>변액보험</b>은 꼭 넣어 주세요.</p>
+    <div class="grid2">
+      <label>확인한 적립금<input id="p-actAmt" class="money" inputmode="numeric" placeholder="0"></label>
+      <label>확인한 날<input id="p-actDate" type="date"></label>
+    </div>
+  </details>
+
   <details class="more" id="p-more">
     <summary>보장 만기 · 연금 받기 · 해지 · 메모</summary>
     <div class="grid2">
@@ -210,6 +226,23 @@
   <div id="shareIn"></div>
   <button type="button" class="btn wide" data-close>닫기</button>
 </div>
+</dialog>
+
+<!-- 보험료가 바뀌었어요 -->
+<dialog id="dlgPrem" class="sheet">
+<form id="fPrem" novalidate>
+  <h2>보험료가 바뀌었어요</h2>
+  <p class="note">실손처럼 갱신 때 보험료가 오르면 새 금액과 바뀐 달을 적어 주세요. 그 전 달까지는 예전 금액으로, 그 달부터는 새 금액으로 계산해요. <b id="ph-cur"></b></p>
+  <div class="grid2">
+    <label>새 보험료<input id="ph-amount" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="ph-amount-hint"></small></label>
+    <label>언제부터 <small>바뀐 달</small><input id="ph-from" type="month"></label>
+  </div>
+  <p class="err" id="ph-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
 </dialog>
 
 <!-- 가족 추가/수정 -->
