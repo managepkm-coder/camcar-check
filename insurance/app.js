@@ -117,6 +117,13 @@ function normalize(d) {
     payStart: ymStr(ym(p.payStart)), payYears: +p.payYears || null, payAmt: +p.payAmt || null,
     cancel: ymStr(ym(p.cancel)), cancelPlan: normDate(p.cancelPlan), memo: String(p.memo || ''),
     lump: Math.max(0, Math.round(+p.lump || 0)) || null, lumpDate: normDate(p.lumpDate),
+    // 보험료가 바뀐 기록: [{ from: 'YYYY-MM'(처음 금액은 ''), amount }] — 마지막이 지금 보험료
+    history: (Array.isArray(p.history) ? p.history : []).map((x) => ({ from: x && x.from ? ymStr(ym(x.from)) : '', amount: Math.round(+(x && x.amount) || 0) }))
+      .filter((x) => x.amount > 0).sort((a, b) => a.from.localeCompare(b.from)),
+    // 저축 보험: 적립금 계산용
+    saving: !!p.saving, rate: p.rate === '' || p.rate == null || Number.isNaN(+p.rate) ? null : +p.rate,
+    ratio: p.ratio === '' || p.ratio == null || Number.isNaN(+p.ratio) ? null : +p.ratio,
+    actAmt: Math.round(+p.actAmt || 0) || null, actDate: normDate(p.actDate),
     claims: (Array.isArray(p.claims) ? p.claims : []).map((c) => ({
       id: String((c && c.id) || uid()), date: normDate(c && c.date), amount: Math.round(+(c && c.amount) || 0), memo: String((c && c.memo) || '').slice(0, 30),
     })).filter((c) => c.date && c.amount > 0),
@@ -158,6 +165,15 @@ function calc(p) {
   if (!k) { k = compute(p); memo.set(p, k); }
   return k;
 }
+/** 그 달에 낸 보험료. 보험료가 바뀐 기록이 있으면 그 달에 맞는 금액 (실손처럼 갱신 때마다 오르는 보험) */
+function premAt(p, m) {
+  const h = p.history;
+  if (!h || h.length < 2) return p.premium;
+  let amt = h[0].amount;
+  for (const x of h) { if ((x.from ? ym(x.from) : -Infinity) <= m) amt = x.amount; else break; }
+  return amt;
+}
+
 function compute(p) {
   const s = ym(p.start), c = ym(p.cancel);
   let e = ym(p.end);
@@ -191,11 +207,16 @@ function compute(p) {
   if (status === 'cancelled') remainN = 0;
   if (lumpOnly) { totalN = 0; paidN = 0; remainN = 0; e = null; }
   const lumpLeft = lump && !lumpPaid && status !== 'cancelled' ? lump : 0;
+  let instPaid = (paidN ?? 0) * p.premium;
+  if (p.history && p.history.length > 1 && paidN && s != null) { // 바뀐 금액마다 따로 더한다
+    instPaid = 0;
+    for (let i = 0; i < paidN; i++) instPaid += premAt(p, s + i * per);
+  }
   return {
     s, e, c, per, status, totalN, paidN, remainN, lump, lumpOn, lumpPaid, lumpOnly,
     monthly: p.premium / per, // 연납은 월로 환산 (일시납은 월 보험료에 넣지 않는다)
-    paidAmt: (paidN ?? 0) * p.premium + (lumpPaid ? lump : 0),
-    totalAmt: lumpOnly ? lump : Number.isFinite(totalN) ? totalN * p.premium + lump : null, // 계약 전체에 낼 돈
+    paidAmt: instPaid + (lumpPaid ? lump : 0),
+    totalAmt: lumpOnly ? lump : Number.isFinite(totalN) ? instPaid + (totalN - (paidN ?? 0)) * p.premium + lump : null, // 계약 전체에 낼 돈
     remainAmt: lumpOnly ? lumpLeft : Number.isFinite(remainN) ? remainN * p.premium + lumpLeft : null,
     pct: paidN != null && Number.isFinite(totalN) && totalN > 0 ? paidN / totalN : null,
     left: e != null ? Math.max(0, e - NOW) : null, // 이번 달 다음부터 남은 개월
@@ -291,6 +312,12 @@ function summaryHTML(list) {
     <div class="stats">
       <div><small>납부한 금액</small><b>${manwon(paid)}</b>${nNoStart ? `<em>시작 월 모르는 ${nNoStart}건 빼고</em>` : ''}</div>
       <div><small>남은 납부액</small><b>${manwon(remain)}</b>${nOpen ? `<em>갱신형 ${nOpen}건 빼고</em>` : ''}</div>
+      ${(() => {
+        const svs = list.map(savingOf).filter((x) => x && x.now != null);
+        if (!svs.length) return '';
+        const tot = svs.reduce((a, x) => a + x.now, 0), inn = svs.reduce((a, x) => a + x.paidIn, 0);
+        return `<div class="sav"><small>저축 보험 적립금 (예상)</small><b>${manwon(tot)}</b><em>${svs.length}건 · 낸 돈 ${manwon(inn)}${inn ? ` 대비 ${pct1(tot / inn - 1)}` : ''}</em></div>`;
+      })()}
       <div class="claim" data-act="addClaim" role="button" tabindex="0"><small>받은 보험금</small><b>${manwon(sumClaims(list))}</b>
         <em>${countClaims(list) ? `${countClaims(list)}건${paid ? ` · 납부한 금액의 ${Math.round((sumClaims(list) / paid) * 100)}%` : ''}` : '아직 기록 없음 · 눌러서 기록'}</em></div>
     </div>
@@ -400,6 +427,41 @@ function timelineHTML(list) {
   </div>`;
 }
 
+/** 저축 보험의 적립금 추정.
+ * 낸 돈 × 적립 비율(사업비를 뺀 몫)을 연 이율로 달마다 불린다. 보험사에서 확인한 적립금이 있으면 그 값에서 시작한다.
+ * 연금을 받기 시작했거나 해지한 보험은 계산하지 않는다. */
+function savingOf(p) {
+  if (!p.saving) return null;
+  const k = calc(p);
+  if (k.status === 'cancelled') return null;
+  const ps = ym(p.payStart);
+  if (ps != null && ps <= NOW) return { receiving: true };
+  const rate = (p.rate != null ? p.rate : 2.5) / 100, ratio = (p.ratio != null ? p.ratio : 95) / 100;
+  const rm = Math.pow(1 + rate, 1 / 12) - 1;
+  const act = p.actAmt && p.actDate ? { v: p.actAmt, m: ym(p.actDate) } : null;
+  const lumpM = k.lump && k.lumpOn ? ym(k.lumpOn) : null;
+  const first = act ? act.m : k.s != null ? k.s : lumpM;
+  if (first == null) return { unknown: true };
+  const lastPaid = k.paidN ? k.s + (k.paidN - 1) * k.per : -Infinity;
+  const inst = (m) => k.s != null && m >= k.s && (m - k.s) % k.per === 0 && (k.e == null || m <= k.e) && !k.lumpOnly;
+  const add = (m, future) => ((inst(m) && (future || m <= lastPaid) ? premAt(p, m) : 0) + (m === lumpM && (future || k.lumpPaid) ? k.lump : 0)) * ratio;
+  let v = act ? act.v : 0;
+  for (let m = first; m <= NOW; m++) {
+    if (m > first) v *= 1 + rm;
+    if (!act || m > act.m) v += add(m, false);
+  }
+  // 앞으로: 연금 시작(없으면 납입 끝) 때 예상 적립금
+  const tgt = ps != null && ps > NOW ? ps : k.e != null && k.e > NOW ? k.e : null;
+  let target = null;
+  if (tgt != null && tgt - NOW <= 12 * 80) {
+    let f = v;
+    for (let m = NOW + 1; m <= tgt; m++) { f *= 1 + rm; f += add(m, true); }
+    target = { m: tgt, v: f, label: ps != null && tgt === ps ? '연금 시작' : '납입 끝' };
+  }
+  return { now: v, paidIn: k.paidAmt, gain: k.paidAmt ? v / k.paidAmt - 1 : null, target, rate: rate * 100, ratio: ratio * 100, act: p.actAmt && p.actDate ? { v: p.actAmt, d: p.actDate } : null };
+}
+const pct1 = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)}%`;
+
 /** 보험 하나의 금액 칸들: 총 납부할 금액 · 납부한 금액 · 남은 납부액 (+ 받은 보험금) */
 function amountBoxes(p, k) {
   const box = (label, val, cls = '') => `<div${cls ? ` class="${cls}"` : ''}><small>${label}</small><b>${val}</b></div>`;
@@ -412,6 +474,9 @@ function amountBoxes(p, k) {
       + box('납부한 금액', paid)
       + box('남은 납부액', k.remainAmt != null ? `${won(k.remainAmt)}원` : '갱신형', 'rem');
   }
+  const sv = savingOf(p);
+  if (sv && sv.now != null) h += box(sv.act ? '적립금 (확인값 + 이후)' : '예상 적립금', `${won(sv.now)}원${sv.gain != null ? ` <small>낸 돈 대비 ${pct1(sv.gain)}</small>` : ''}`, 'sav');
+  else if (sv && sv.receiving) h += box('적립금', '연금 받는 중 · 보험사 앱에서 확인', 'sav');
   if (claimsOf(p).length) h += box('받은 보험금', `${won(sumClaims([p]))}원 · ${claimsOf(p).length}건`, 'clm');
   return h;
 }
@@ -454,12 +519,19 @@ function cardHTML(p) {
       ${multi ? `<span class="who" data-move="${p.id}" role="button" tabindex="0" aria-label="${esc(m.name)} 보험 · 다른 사람으로 옮기기">${esc(m.name)} ⇄</span>` : ''}
     </div>
     ${k.lumpOnly ? '' : `<div class="pol-row"><span>${p.cycle === 'Y' ? '연' : '월'} 보험료</span><b>${won(p.premium)}원</b></div>`}
+    ${p.history && p.history.length > 1 ? `<div class="pol-hist">보험료 ${p.history.length - 1}번 바뀜 · 처음 ${won(p.history[0].amount)}원 → 지금 ${won(p.premium)}원</div>` : ''}
     ${k.lump ? `<div class="pol-row lump"><span>일시납${k.lumpOn ? ` <small>${dateDot(k.lumpOn)}</small>` : ''}</span><b>${won(k.lump)}원</b></div>` : ''}
     <div class="pol-period"><span>${period}</span><span>${when}</span></div>
     ${p.cancelPlan && k.status !== 'cancelled' ? `<div class="pol-cplan">✂ 해지 예정 ${dateDot(p.cancelPlan)} · ${cancelDday(p.cancelPlan)}</div>` : ''}
     ${meter}
     <div class="pol-foot">${foot}</div>
     <div class="pol-amts">${amts}</div>
+    ${(() => {
+      const sv = savingOf(p);
+      if (!sv || sv.now == null) return '';
+      const basis = sv.act ? `보험사 확인 ${dateDot(sv.act.d)} ${won(sv.act.v)}원에서 계산` : `연 ${sv.rate}% · 낸 돈의 ${sv.ratio}% 적립 가정`;
+      return `<div class="pol-sav">${basis}${sv.target ? ` · ${sv.target.label}(${ymDot(sv.target.m)}) 때 약 ${manwon(sv.target.v)}` : ''}</div>`;
+    })()}
     ${recv}
     ${p.memo ? `<div class="pol-memo">${esc(p.memo)}</div>` : ''}
   </article>`;
@@ -564,6 +636,9 @@ function openPolicy(id) {
   set('insurer', p.insurer); set('type', p.type); set('name', p.name); set('product', p.product);
   set('premium', p.premium ? won(p.premium) : ''); set('cycle', p.cycle);
   set('lump', p.lump ? won(p.lump) : ''); set('lumpDate', p.lumpDate);
+  $('#p-saving').checked = !!p.saving; set('rate', p.rate); set('ratio', p.ratio);
+  set('actAmt', p.actAmt ? won(p.actAmt) : ''); set('actDate', p.actDate);
+  $('#p-savbox').open = !!p.saving;
   $('#p-lump-hint').textContent = p.lump >= 10000 ? manwon(p.lump) : '';
   set('start', toDateInput(p.start)); set('end', p.end); set('years', '');
   set('cover', p.cover); set('payday', p.payday); set('payStart', p.payStart); set('payYears', p.payYears);
@@ -575,6 +650,7 @@ function openPolicy(id) {
   $('#pDel').hidden = !editing;
   $('#pMove').hidden = !editing;
   renderPolicyAlarms();
+  renderPolicyHistory();
   $('#p-stats').hidden = !editing;
   if (editing) { const k = calc(editing); $('#p-stats').innerHTML = amountBoxes(editing, k); }
   const showPlan = !!(editing && editing.cancelPlan && calc(editing).status !== 'cancelled');
@@ -711,6 +787,8 @@ $('#fPolicy').addEventListener('submit', (e) => {
     who: ($('input[name=who]:checked') || {}).value || db.members[0].id,
     insurer: v('insurer'), name: v('name'), product: v('product'), type: v('type'),
     premium: digits(v('premium')), cycle: v('cycle'), lump: digits(v('lump')) || null, lumpDate: normDate(v('lumpDate')),
+    saving: $('#p-saving').checked, rate: v('rate') === '' ? null : +v('rate'), ratio: v('ratio') === '' ? null : +v('ratio'),
+    actAmt: digits(v('actAmt')) || null, actDate: normDate(v('actDate')),
     start: normYmd(v('start')), end: open ? '' : ymStr(ym(v('end'))),
     cover: v('cover'), payday: Math.min(31, +v('payday')) || null,
     payStart: ymStr(ym(v('payStart'))), payYears: +v('payYears') || null, payAmt: digits(v('payAmt')) || null,
@@ -720,6 +798,16 @@ $('#fPolicy').addEventListener('submit', (e) => {
   const err = policyError(p, open);
   if (err) { $('#p-err').textContent = err; return; }
   const oldPlan = editing ? editing.cancelPlan || '' : '';
+  // 납입액을 바꿨으면: 보험료가 오른 것인지(그 전은 예전 금액 유지), 처음부터 잘못 넣은 것인지 묻는다
+  if (editing && editing.premium && p.premium && p.premium !== editing.premium && ym(editing.start) != null && ym(editing.start) < NOW
+    && confirm(`보험료를 ${won(editing.premium)}원 → ${won(p.premium)}원으로 바꿨어요.\n이번 달(${ymDot(NOW)})부터 오른 것으로 기록할까요?\n\n확인: 그 전에 낸 돈은 예전 금액으로 계산\n취소: 처음부터 이 금액이었던 것으로 고치기`)) {
+    const h = editing.history && editing.history.length ? editing.history.filter((x) => x.from !== ymStr(NOW)) : [{ from: '', amount: editing.premium }];
+    h.push({ from: ymStr(NOW), amount: p.premium });
+    h.sort((a, b) => a.from.localeCompare(b.from));
+    editing.history = h;
+  } else if (editing && editing.history && editing.history.length > 1) {
+    editing.history[editing.history.length - 1].amount = p.premium; // 지금 보험료(마지막 기록)를 고친 것으로 본다
+  }
   if (editing) Object.assign(editing, p); else db.policies.push(p);
   const target = editing || p;
   const al = syncCancelAlarm(target);
@@ -916,11 +1004,11 @@ function sample() {
   const out = {
     members: [me, sp, kid],
     policies: [
-      P(me, '한화생명', '한화 연금', '연금', 200000, '2014-03', '2034-02', { payStart: '2042-01', payAmt: 500000, memo: '평생 받는 연금' }),
-      P(me, '교보생명', '교보 변액연금', '연금', 100000, '2016-09', '2028-09', { payStart: '2047-01', payYears: 10, payAmt: 300000, lump: 6000000, memo: '처음에 600만원 일시납 + 매달 10만원' }),
+      P(me, '한화생명', '한화 연금', '연금', 200000, '2014-03', '2034-02', { payStart: '2042-01', payAmt: 500000, memo: '평생 받는 연금', saving: true, rate: 2.5, ratio: 93 }),
+      P(me, '교보생명', '교보 변액연금', '연금', 100000, '2016-09', '2028-09', { payStart: '2047-01', payYears: 10, payAmt: 300000, lump: 6000000, memo: '처음에 600만원 일시납 + 매달 10만원', saving: true, actAmt: 19200000, actDate: '2026-10-15' }),
       P(me, '메리츠화재', '메리츠 암보험', '암', 35000, '2013-05', '2033-04', { cover: '100세' }),
       P(me, '동양생명', '동양 종신', '종신', 29700, '2007-08', '2027-07', { cover: '종신', memo: '자동이체 할인 -300원' }),
-      P(me, '현대해상', '현대 실손', '실손', 38500, '2017-04', '', { claims: [
+      P(me, '현대해상', '현대 실손', '실손', 38500, '2017-04', '', { history: [{ from: '', amount: 21800 }, { from: '2020-04', amount: 27400 }, { from: '2023-04', amount: 33100 }, { from: '2026-04', amount: 38500 }], claims: [
         { id: uid(), date: '2025-08-12', amount: 132000, memo: '실손 병원비' }, { id: uid(), date: '2026-03-03', amount: 48500, memo: '통원' }] }),
       P(me, 'DB손해보험', 'DB 운전자', '운전자', 12800, '2021-02', '2041-01'),
       P(me, 'NH농협생명', '농협 정기', '정기', 45000, '2009-01', '2018-12'),
@@ -1886,6 +1974,71 @@ async function bootShare() {
   } catch (e) { setShareStatus('error', e); }
 }
 
+/* ── 보험료가 바뀌었어요 (갱신·인상) ──
+ * 바뀐 달과 새 금액을 기록하면, 그 전에 낸 달은 예전 금액으로 더해서 '납부한 금액'이 정확해진다. */
+const dlgPh = $('#dlgPrem');
+function renderPolicyHistory() {
+  const el = $('#p-history');
+  el.hidden = !editing;
+  if (!editing) return;
+  const h = editing.history || [];
+  el.innerHTML = `<div class="card-h"><b>보험료 변경</b><button type="button" class="link" data-act="addPrem">＋ 보험료가 바뀌었어요</button></div>
+    ${h.length > 1 ? `<ol class="ev hist">${h.map((x, i) => `<li><span class="ev-t">${x.from ? ymDot(ym(x.from)) : '처음'}</span>
+      <span class="ev-n"><b>${won(x.amount)}원</b><small>${i === h.length - 1 ? '지금 보험료' : i === 0 ? '처음 금액' : ''}</small></span>
+      <span class="ev-a"><button type="button" class="link" data-act="editPrem" data-i="${i}">고치기</button>${i > 0 ? ` <button type="button" class="link danger-link" data-act="delPrem" data-i="${i}">지우기</button>` : ''}</span></li>`).join('')}</ol>`
+    : '<p class="sub">실손처럼 갱신 때마다 오르는 보험은 오를 때마다 여기에 기록하세요. 그 전에 낸 돈은 예전 금액으로 계산해요.</p>'}`;
+}
+function openPrem() {
+  if (!editing) return;
+  $('#ph-amount').value = ''; $('#ph-amount-hint').textContent = '';
+  $('#ph-from').value = ymStr(NOW); $('#ph-err').textContent = '';
+  $('#ph-cur').textContent = `지금 보험료: ${won(editing.premium)}원`;
+  dlgPh.showModal();
+}
+function refreshPolicySheet() {
+  $('#p-premium').value = editing.premium ? won(editing.premium) : ''; premiumHint();
+  memo = new Map();
+  $('#p-stats').innerHTML = amountBoxes(editing, calc(editing));
+  renderPolicyHistory();
+}
+$('#fPrem').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (RO || !editing) return;
+  const amount = digits($('#ph-amount').value), from = ymStr(ym($('#ph-from').value));
+  const s = ym(editing.start);
+  const err = !amount ? '새 보험료를 넣어 주세요.' : !from ? '언제부터 바뀌었는지 넣어 주세요.'
+    : s != null && ym(from) <= s ? '납입 시작보다 뒤의 달을 넣어 주세요.' : '';
+  if (err) { $('#ph-err').textContent = err; return; }
+  const h = editing.history && editing.history.length ? editing.history.slice() : [{ from: '', amount: editing.premium }];
+  const rest = h.filter((x) => x.from !== from);
+  rest.push({ from, amount });
+  rest.sort((a, b) => a.from.localeCompare(b.from));
+  editing.history = rest;
+  editing.premium = rest[rest.length - 1].amount;
+  save(); render(); dlgPh.close(); refreshPolicySheet();
+  toast(`${ymDot(ym(from))}부터 ${won(amount)}원으로 기록했어요. 그 전은 예전 금액으로 계산해요.`);
+});
+function editPrem(t) {
+  if (!editing) return;
+  const i = +t.dataset.i, h = (editing.history || []).slice();
+  if (!h[i]) return;
+  const n = digits(prompt(`${h[i].from ? `${ymDot(ym(h[i].from))}부터` : '처음'} 보험료를 얼마로 고칠까요?`, String(h[i].amount)));
+  if (!n) return;
+  h[i] = { ...h[i], amount: n };
+  editing.history = h;
+  editing.premium = h[h.length - 1].amount;
+  save(); render(); refreshPolicySheet();
+}
+function delPrem(t) {
+  if (!editing) return;
+  const i = +t.dataset.i, h = (editing.history || []).slice();
+  if (!(i > 0) || !confirm(`${h[i].from ? ymDot(ym(h[i].from)) : ''} ${won(h[i].amount)}원 기록을 지울까요?`)) return;
+  h.splice(i, 1);
+  editing.history = h.length > 1 ? h : [];
+  editing.premium = (h[h.length - 1] || {}).amount || editing.premium;
+  save(); render(); refreshPolicySheet();
+}
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
@@ -1905,6 +2058,9 @@ const actions = {
   addAlarmHere: () => { if (editing) openAlarm(null, editing.id); },
   deleteAlarm,
   movePolicy: () => { if (editing) openMove(editing.id); },
+  addPrem: openPrem,
+  editPrem,
+  delPrem,
   openShare,
   saveCfg: () => {
     const cfg = parseCfg($('#fbcfg').value);
@@ -1964,7 +2120,7 @@ const actions = {
 // 보기만 하는 중에는 막는 버튼들 (캘린더에 넣기 · 내보내기 · 공유 화면은 된다)
 const MUTATE = new Set(['add', 'scan', 'pickPhoto', 'pasteMode', 'editText', 'parsePaste', 'saveScan', 'calcRemain', 'deletePolicy',
   'addMember', 'deleteMember', 'addClaim', 'addClaimHere', 'deleteClaim', 'addAlarm', 'addAlarmHere', 'deleteAlarm',
-  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe']);
+  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe', 'addPrem', 'editPrem', 'delPrem']);
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto]');
@@ -2000,9 +2156,14 @@ $$('input.money').forEach((el) => el.addEventListener('input', () => {
   if (el.id === 'p-premium') premiumHint();
   if (el.id === 'c-amount') $('#c-amount-hint').textContent = n >= 10000 ? manwon(n) : '';
   if (el.id === 'p-lump') $('#p-lump-hint').textContent = n >= 10000 ? manwon(n) : '';
+  if (el.id === 'ph-amount') $('#ph-amount-hint').textContent = n >= 10000 ? manwon(n) : '';
 }));
 $('#p-years').addEventListener('input', fromYears);
 $('#p-end').addEventListener('change', fromEnd);
+// 새 보험에서 종류를 연금·저축으로 고르면 적립금 계산을 켜 둔다
+$('#p-type').addEventListener('change', () => {
+  if (!editing && /연금|저축/.test($('#p-type').value)) { $('#p-saving').checked = true; $('#p-savbox').open = true; }
+});
 $('#p-start').addEventListener('change', () => { if (parseFloat($('#p-years').value) > 0) fromYears(); else fromEnd(); });
 $('#p-open').addEventListener('change', syncOpen);
 $('#fileIn').addEventListener('change', async (e) => {
