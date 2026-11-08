@@ -649,6 +649,7 @@ function openPolicy(id) {
   $('#p-more').open = !!(p.cover || p.payday || p.payStart || p.cancel || p.memo);
   $('#pDel').hidden = !editing;
   $('#pMove').hidden = !editing;
+  $('#pCopy').hidden = !editing;
   renderPolicyAlarms();
   renderPolicyHistory();
   $('#p-stats').hidden = !editing;
@@ -1620,23 +1621,31 @@ function renderPolicyAlarms() {
 }
 $('#a-repeat').addEventListener('change', syncRepeat);
 
-/* ── 다른 사람 보험으로 옮기기 ── (받은 보험금·알림은 보험에 붙어 있어서 같이 옮겨진다) */
-let moving = null;
+/* ── 다른 사람 보험으로 옮기기 / 복사하기 ──
+ * 옮기기: 받은 보험금·알림은 보험에 붙어 있어서 같이 옮겨진다.
+ * 복사하기: 같은 내용으로 다른 사람 보험을 하나 더 만든다. 받은 보험금·보험료 변경 기록·해지 예정·확인한 적립금은 그 사람 것이라 뺀다. */
+let moving = null, moveMode = 'move';
 const dlgMv = $('#dlgMove');
-function openMove(pid) {
+function openMove(pid, mode = 'move') {
   moving = db.policies.find((p) => p.id === pid) || null;
   if (!moving) return;
+  moveMode = mode;
   renderMove();
   dlgMv.showModal();
 }
 function renderMove() {
   if (!moving) return;
-  $('#mvTitle').textContent = `‘${moving.name}’ 누구 보험으로 옮길까요?`;
+  const copy = moveMode === 'copy';
+  $('#mvTitle').textContent = copy ? `‘${moving.name}’ 누구 보험으로 복사할까요?` : `‘${moving.name}’ 누구 보험으로 옮길까요?`;
+  $('#mvNote').textContent = copy
+    ? '같은 내용으로 보험이 하나 더 생겨요. 받은 보험금·보험료 변경 기록·해지 예정일·확인한 적립금은 그 사람 것이라 복사하지 않아요. 복사한 뒤 금액을 고치세요.'
+    : '받은 보험금과 알림도 같이 옮겨져요.';
   $('#mvList').innerHTML = db.members.map((m) => {
     const cur = m.id === moving.who;
     const n = db.policies.filter((p) => p.who === m.id).length;
-    return `<button type="button" class="mrow${cur ? ' cur' : ''}" ${cur ? 'disabled' : `data-moveto="${m.id}"`} style="--c:var(--m${m.slot})">
-      <i></i><b>${esc(m.name)}</b><small>${m.birth ? `${m.birth}년생 · ` : ''}보험 ${n}건</small><span>${cur ? '지금' : '옮기기 ›'}</span></button>`;
+    const off = cur && !copy;
+    return `<button type="button" class="mrow${off ? ' cur' : ''}" ${off ? 'disabled' : `data-moveto="${m.id}"`} style="--c:var(--m${m.slot})">
+      <i></i><b>${esc(m.name)}</b><small>${m.birth ? `${m.birth}년생 · ` : ''}보험 ${n}건</small><span>${copy ? (cur ? '하나 더 ›' : '복사 ›') : cur ? '지금' : '옮기기 ›'}</span></button>`;
   }).join('');
 }
 function movePolicy(toId) {
@@ -1646,6 +1655,17 @@ function movePolicy(toId) {
   save(); dlgMv.close(); render();
   if (dlgP.open && editing === moving) whoPicker(toId); // 열려 있는 보험 화면도 맞춘다 (저장해도 되돌아가지 않게)
   toast(`‘${moving.name}’을(를) ${to.name} 보험으로 옮겼어요.`);
+}
+function copyPolicy(toId) {
+  const to = db.members.find((m) => m.id === toId);
+  if (!moving || !to) return;
+  const { id, who, claims, cancelPlan, actAmt, actDate, history, ...rest } = moving;
+  const copy = { ...JSON.parse(JSON.stringify(rest)), id: uid(), who: toId, claims: [], history: [], cancelPlan: '', actAmt: null, actDate: '' };
+  db.policies.push(copy);
+  save(); dlgMv.close(); render();
+  if (dlgP.open) dlgP.close();
+  openPolicy(copy.id); // 바로 열어서 금액을 고칠 수 있게
+  toast(`${to.name} 보험으로 복사했어요. 금액이 다르면 고쳐 주세요.`);
 }
 
 /* ── 가족 실시간 공유 (Firebase) ──
@@ -2058,6 +2078,7 @@ const actions = {
   addAlarmHere: () => { if (editing) openAlarm(null, editing.id); },
   deleteAlarm,
   movePolicy: () => { if (editing) openMove(editing.id); },
+  copyPolicy: () => { if (editing) openMove(editing.id, 'copy'); },
   addPrem: openPrem,
   editPrem,
   delPrem,
@@ -2120,7 +2141,7 @@ const actions = {
 // 보기만 하는 중에는 막는 버튼들 (캘린더에 넣기 · 내보내기 · 공유 화면은 된다)
 const MUTATE = new Set(['add', 'scan', 'pickPhoto', 'pasteMode', 'editText', 'parsePaste', 'saveScan', 'calcRemain', 'deletePolicy',
   'addMember', 'deleteMember', 'addClaim', 'addClaimHere', 'deleteClaim', 'addAlarm', 'addAlarmHere', 'deleteAlarm',
-  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe', 'addPrem', 'editPrem', 'delPrem']);
+  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe', 'addPrem', 'editPrem', 'delPrem', 'copyPolicy']);
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto]');
@@ -2136,7 +2157,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.years) { $('#p-years').value = t.dataset.years; fromYears(); return; }
   if (t.dataset.member) { openMember(t.dataset.member); return; }
   if (t.dataset.move) { openMove(t.dataset.move); return; }
-  if (t.dataset.moveto) { movePolicy(t.dataset.moveto); return; }
+  if (t.dataset.moveto) { if (moveMode === 'copy') copyPolicy(t.dataset.moveto); else movePolicy(t.dataset.moveto); return; }
   if (t.dataset.claim) { openClaim(t.dataset.claim); return; }
   if (t.dataset.ics) { const a = (db.alarms || []).find((x) => x.id === t.dataset.ics); if (a) downloadIcs([a]); return; }
   if (t.dataset.alarm) { openAlarm(t.dataset.alarm); return; }
