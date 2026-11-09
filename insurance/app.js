@@ -650,6 +650,7 @@ function openPolicy(id) {
   $('#pDel').hidden = !editing;
   $('#pMove').hidden = !editing;
   $('#pCopy').hidden = !editing;
+  $('#pCopyMe').hidden = !editing || (!RO && editing.who === db.members[0].id); // 이미 내 보험이면 숨김
   renderPolicyAlarms();
   renderPolicyHistory();
   $('#p-stats').hidden = !editing;
@@ -1656,16 +1657,36 @@ function movePolicy(toId) {
   if (dlgP.open && editing === moving) whoPicker(toId); // 열려 있는 보험 화면도 맞춘다 (저장해도 되돌아가지 않게)
   toast(`‘${moving.name}’을(를) ${to.name} 보험으로 옮겼어요.`);
 }
+/** 복사본: 받은 보험금·보험료 변경 기록·해지 예정·확인한 적립금은 원래 사람 것이라 뺀다 */
+function makeCopy(src, who) {
+  const { id, who: _w, claims, cancelPlan, actAmt, actDate, history, ...rest } = src;
+  return { ...JSON.parse(JSON.stringify(rest)), id: uid(), who, claims: [], history: [], cancelPlan: '', actAmt: null, actDate: '' };
+}
 function copyPolicy(toId) {
   const to = db.members.find((m) => m.id === toId);
   if (!moving || !to) return;
-  const { id, who, claims, cancelPlan, actAmt, actDate, history, ...rest } = moving;
-  const copy = { ...JSON.parse(JSON.stringify(rest)), id: uid(), who: toId, claims: [], history: [], cancelPlan: '', actAmt: null, actDate: '' };
+  const copy = makeCopy(moving, toId);
   db.policies.push(copy);
   save(); dlgMv.close(); render();
   if (dlgP.open) dlgP.close();
   openPolicy(copy.id); // 바로 열어서 금액을 고칠 수 있게
   toast(`${to.name} 보험으로 복사했어요. 금액이 다르면 고쳐 주세요.`);
+}
+/** 내 보험으로 복사: 내 장부에서는 '본인'(맨 앞 가족)에게, 가족 장부를 보기만 할 때는 이 폰의 내 장부로 */
+function copyToMe() {
+  if (!editing) return;
+  if (!RO) {
+    moving = editing;
+    copyPolicy(db.members[0].id);
+    return;
+  }
+  const mine = normalize(lsGet(KEY) || {});
+  const copy = makeCopy(editing, mine.members[0].id);
+  mine.policies.push(copy);
+  try { localStorage.setItem(KEY, JSON.stringify(mine)); localStorage.setItem(SAVED_AT, String(Date.now())); }
+  catch { toast('저장 공간이 부족해 복사하지 못했어요.'); return; }
+  dlgP.close();
+  toast(`‘${editing.name}’을(를) 내 장부(${mine.members[0].name})에 복사했어요. ‘그만 보기’로 내 장부에 가면 보여요.`);
 }
 
 /* ── 가족 실시간 공유 (Firebase) ──
@@ -2079,6 +2100,7 @@ const actions = {
   deleteAlarm,
   movePolicy: () => { if (editing) openMove(editing.id); },
   copyPolicy: () => { if (editing) openMove(editing.id, 'copy'); },
+  copyToMe,
   addPrem: openPrem,
   editPrem,
   delPrem,
