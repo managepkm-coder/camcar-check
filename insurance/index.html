@@ -29,6 +29,7 @@
   <div class="seg" id="seg" role="tablist">
     <button role="tab" data-view="timeline">납입기간 한눈에</button>
     <button role="tab" data-view="list">보험별 상세</button>
+    <button role="tab" data-view="cover">보장 한눈에</button>
   </div>
 
   <section id="content"></section>
@@ -103,6 +104,7 @@
     <p class="hint" id="h-out"></p>
   </details>
 
+  <div class="pclaims" id="p-covers"></div>
   <div class="pclaims" id="p-history" hidden></div>
 
   <details class="more" id="p-savbox">
@@ -156,8 +158,8 @@
     <label>받은 날<input id="c-date" type="date"></label>
     <label>받은 금액<input id="c-amount" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="c-amount-hint"></small></label>
   </div>
-  <label>내용 <small>선택</small><input id="c-memo" maxlength="30" placeholder="예: 실손 병원비, 입원비, 암 진단금"></label>
-  <div class="quick" aria-label="내용 빠른 선택">
+  <label>내용 <small>선택 · 아래에서 여러 개 고를 수 있어요</small><input id="c-memo" maxlength="40" placeholder="예: 실손 병원비, 입원비, 암 진단금"></label>
+  <div class="quick memo" aria-label="내용 빠른 선택 (여러 개)">
     <button type="button" data-memo="실손 병원비">실손 병원비</button><button type="button" data-memo="통원">통원</button><button type="button" data-memo="입원비">입원비</button><button type="button" data-memo="수술비">수술비</button><button type="button" data-memo="진단금">진단금</button><button type="button" data-memo="만기·해지 환급금">환급금</button>
   </div>
   <p class="err" id="c-err" role="alert"></p>
@@ -167,6 +169,61 @@
     <button type="submit" class="btn primary">저장</button>
   </div>
 </form>
+</dialog>
+
+<!-- 보장 하나 추가/수정 -->
+<dialog id="dlgCover" class="sheet">
+<form id="fCover" novalidate>
+  <h2 id="cvTitle">보장 추가</h2>
+  <label>보장 이름 <small>증권에 적힌 대로</small><input id="cv-name" maxlength="40" placeholder="예: 일반암 진단비(유사암 제외)" autocomplete="off"></label>
+  <div class="quick" aria-label="자주 있는 보장">
+    <button type="button" data-cvname="상해사망">상해사망</button><button type="button" data-cvname="질병사망">질병사망</button><button type="button" data-cvname="일반암 진단비">암 진단비</button><button type="button" data-cvname="유사암 진단비">유사암 진단비</button><button type="button" data-cvname="뇌혈관질환 진단비">뇌혈관 진단비</button><button type="button" data-cvname="허혈성심장질환 진단비">심장 진단비</button><button type="button" data-cvname="질병 수술비">질병 수술비</button><button type="button" data-cvname="상해 수술비">상해 수술비</button><button type="button" data-cvname="질병 입원일당">입원일당</button><button type="button" data-cvname="실손 의료비">실손 의료비</button><button type="button" data-cvname="골절 진단비">골절 진단비</button>
+  </div>
+  <div class="grid2">
+    <label>보장 금액 <small>비우면 ‘가입’</small><input id="cv-amount" class="money" inputmode="numeric" placeholder="0"><small class="hint" id="cv-amount-hint"></small></label>
+    <label>분류 <small>이름으로 자동</small><select id="cv-cat"></select></label>
+  </div>
+  <div class="quick" aria-label="금액 더하기">
+    <button type="button" data-cvadd="100000000">+1억</button><button type="button" data-cvadd="10000000">+1,000만</button><button type="button" data-cvadd="1000000">+100만</button><button type="button" data-cvadd="100000">+10만</button><button type="button" data-cvadd="10000">+1만</button><button type="button" data-cvadd="0">지우기</button>
+  </div>
+  <label>메모 <small>선택</small><input id="cv-note" maxlength="30" placeholder="예: 100세 만기, 갱신형, 1년 내 50%"></label>
+  <p class="err" id="cv-err" role="alert"></p>
+  <div class="actions">
+    <button type="button" class="btn danger" data-act="deleteCover" id="cvDel">삭제</button>
+    <button type="button" class="btn" data-close>취소</button>
+    <button type="button" class="btn" data-act="saveCoverNext" id="cvNext">계속 넣기</button>
+    <button type="submit" class="btn primary">저장</button>
+  </div>
+</form>
+</dialog>
+
+<!-- 보장내용 한꺼번에 넣기 -->
+<dialog id="dlgCovers" class="sheet">
+<div class="in">
+  <section data-cstep="input">
+    <h2 id="cvs-h">보장내용 한꺼번에 넣기</h2>
+    <p class="note">보험증권의 <b>보장내용(가입 담보)</b> 부분을 사진으로 읽거나, 보험사 앱·내보험다보여에서 복사한 글자를 붙여넣으면 보장 이름과 금액을 찾아요.</p>
+    <button type="button" class="btn primary wide big" data-act="coverPhoto">📷 증권 사진에서 읽기<small>폰 안에서 무료로 글자 인식 · 한 번에 5장까지</small></button>
+    <div id="cvs-busy" hidden><div class="spin" aria-hidden="true"></div><p class="note center" id="cvs-msg" aria-live="polite"></p></div>
+    <label class="cvs-label">또는 글자 붙여넣기 <small>한 줄에 하나씩 ‘이름 금액’</small>
+      <textarea id="cvs-text" rows="7" placeholder="상해사망 1억원&#10;일반암 진단비 3,000만원&#10;뇌혈관질환 진단비 1,000만원&#10;질병 입원일당 3만원"></textarea></label>
+    <p class="note small">삼성 갤러리 사진의 <b>T</b>(텍스트 추출)나 Google 렌즈로 복사한 글자도 돼요.</p>
+    <p class="err" id="cvs-err" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>닫기</button>
+      <button type="button" class="btn primary" data-act="parseCovers">보장 찾기</button>
+    </div>
+  </section>
+  <section data-cstep="review" hidden>
+    <h2 id="cvs-title"></h2>
+    <p class="note">맞지 않는 줄은 체크를 빼고, 틀린 이름·금액은 고쳐 주세요. 넣은 뒤에도 하나씩 고칠 수 있어요.</p>
+    <div id="cvs-rows"></div>
+    <div class="actions sticky">
+      <button type="button" class="btn" data-act="coverBack">글자 고치기</button>
+      <button type="button" class="btn primary" data-act="saveCovers" id="cvs-save">넣기</button>
+    </div>
+  </section>
+</div>
 </dialog>
 
 <!-- 알림 -->
@@ -369,6 +426,7 @@
 
 <div id="toast" role="status" hidden></div>
 <input type="file" id="scanFile" accept="image/*" multiple hidden>
+<input type="file" id="coverFile" accept="image/*" multiple hidden>
 <datalist id="insurerList"></datalist>
 <input type="file" id="fileIn" accept=".json,.csv,application/json,text/csv" hidden>
 

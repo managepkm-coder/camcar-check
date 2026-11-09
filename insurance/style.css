@@ -417,3 +417,66 @@ body.ro .syncbar{box-shadow:inset 0 0 0 1.5px var(--mute)}
 body.ro [data-act=addPrem], body.ro [data-act=editPrem], body.ro [data-act=delPrem]{display:none !important}
 
 body.ro [data-act=copyPolicy], body.ro #pMove{display:none !important}
+
+/* ── 받은 보험금 내용: 여러 개 고르기 ── */
+.quick button.on{background:var(--fg);color:var(--card);border-color:var(--fg)}
+
+/* ── 보장내용 ── */
+@media (max-width:380px){ .seg button{font-size:13px;letter-spacing:-.3px} }
+.pol-cov{list-style:none;margin:12px 0 0;padding:9px 12px;border-radius:12px;background:var(--bg);font-size:13px}
+.pol-cov li{display:flex;justify-content:space-between;gap:10px;padding:2px 0}
+.pol-cov li span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--sub)}
+.pol-cov li b{flex:none;font-weight:700;font-variant-numeric:tabular-nums}
+.pol-cov li.more{color:var(--mute);font-size:12px}
+.card-h .links{display:flex;gap:14px;flex-wrap:wrap;justify-content:flex-end}
+.ev.cov li{grid-template-columns:minmax(0,1fr) auto;padding:8px 0}
+.ev.cov .ev-a{color:var(--fg);font-weight:700}
+.pclaims .card-h+.sub{margin-top:-6px}
+
+.cov-card .card-h{margin-bottom:6px}
+.cov-cnt{font-size:12px;font-weight:400;color:var(--mute)}
+h3 .cov-cnt{margin-left:4px}
+.cov-scroll{overflow-x:auto;margin:0 -18px;padding:0 18px;scrollbar-width:thin}
+table.cov{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.cov th,.cov td{padding:10px 6px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+.cov thead th{font-size:12.5px;font-weight:700;color:var(--fg);vertical-align:bottom;border-bottom:1px solid var(--hair);padding-top:4px}
+.cov thead th span{display:inline-flex;align-items:center;gap:5px}
+.cov thead th i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.cov thead th small{display:block;font-size:10.5px;font-weight:400;color:var(--mute)}
+.cov thead th:first-child{text-align:left;font-weight:600;color:var(--mute)}
+.cov tbody th{text-align:left;font-size:13.5px;font-weight:700;position:sticky;left:0;background:var(--card);padding-left:0}
+.cov tbody th::before{content:"▸";display:inline-block;width:14px;color:var(--mute);font-size:11px}
+.cov tr.open th::before{content:"▾"}
+.cov tbody th small{font-size:10.5px;font-weight:400;color:var(--mute);margin-left:4px}
+.cov td{font-size:14px;font-weight:700}
+.cov td small{display:block;font-size:10.5px;font-weight:400;color:var(--mute)}
+.cov td.none{color:var(--mute);font-weight:400}
+.cov td.gap{color:var(--danger);font-weight:600;font-size:13px}
+.cov tr.cov-r{cursor:pointer}
+.cov tr.cov-r:active th,.cov tr.cov-r:active td{background:var(--line)}
+.cov tr.cov-r:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.cov tr.cov-d td{text-align:left;white-space:normal;padding:0 0 8px;font-weight:400}
+.covd{list-style:none;margin:0;padding:4px 12px;border-radius:12px;background:var(--bg)}
+.covd li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.covd li:last-child{border-bottom:0}
+.covd span{min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.covd b{font-size:13.5px}
+.covd small{font-size:11.5px;color:var(--mute)}
+.covd em{flex:none;font-style:normal;font-size:13.5px;font-weight:700}
+.cov-foot{margin:10px 0 0;line-height:1.5}
+.ev.nocov li{grid-template-columns:minmax(0,1fr) auto}
+.ev.nocov .ev-a{color:var(--accent);font-weight:600}
+@media (min-width:700px){ .cov th,.cov td{padding:11px 10px} .cov td{font-size:15px} }
+
+#cvs-busy{margin:8px 0 4px}
+.cvs-label{margin-top:16px}
+.crow{display:grid;grid-template-columns:30px minmax(0,1fr);gap:6px 6px;align-items:center;background:var(--bg);border-radius:14px;padding:10px 10px 10px 8px;margin-bottom:8px}
+.crow.off{opacity:.55}
+.crow-on{grid-row:1/3;margin:0;align-self:start;padding-top:10px;display:flex;justify-content:center}
+.crow-on input{width:22px;height:22px;min-height:0;margin:0;padding:0;accent-color:var(--accent)}
+.crow input,.crow select{background:var(--card);min-height:40px;padding:8px 10px;font-size:15px}
+.crow-name{font-weight:600}
+.crow-2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+.crow-dup{grid-column:2;font-size:12px;color:var(--mute)}
+
+body.ro [data-act=addCover], body.ro [data-act=pasteCovers]{display:none !important}

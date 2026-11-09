@@ -19,6 +19,27 @@ const INSURERS = [
   'NH농협손해보험', '하나손해보험', 'AXA손해보험', '우체국보험', '새마을금고', '신협',
 ];
 
+/* 보장 분류 — '보장 한눈에' 표의 줄 순서. [키, 이름, 기본 보장(비면 '없음' 표시), 금액 뜻] */
+const COVER_CATS = [
+  ['death', '사망', 1], ['disab', '후유장해'], ['cancer', '암 진단', 1], ['minor', '유사암'], ['brain', '뇌혈관', 1], ['heart', '심장', 1],
+  ['surg', '수술비'], ['hosp', '입원비', 0, '하루'], ['medi', '실손 의료비', 1, '한도'], ['fract', '골절·화상'], ['care', '간병·치매'],
+  ['drive', '운전자'], ['liab', '배상책임'], ['tooth', '치아'], ['etc', '기타'],
+];
+const COVER_LABEL = Object.fromEntries(COVER_CATS.map(([k, l]) => [k, l]));
+const CAT_IDX = Object.fromEntries(COVER_CATS.map(([k], i) => [k, i]));
+/** 보장 이름 → 분류. 위에서부터 먼저 맞는 것 (암 수술비는 수술비, 암 입원일당은 입원비). '(유사암 제외)' 같은 괄호 안은 빼고 본다 */
+const COVER_RULES = [
+  ['medi', /실손|실비|의료비|처방조제/], ['death', /사망/], ['disab', /장해/], ['surg', /수술/], ['hosp', /입원|일당/],
+  ['medi', /통원|외래/], ['care', /간병|치매|요양|ADL|활동불능/i], ['drive', /운전|벌금|교통사고|변호사|면허|자동차/], ['liab', /배상/],
+  ['tooth', /치아|임플란트|보철|브릿지|크라운|틀니|레진|아말감|치과/], ['minor', /유사암|소액암|갑상선|제자리|경계성|기타피부|피부암/],
+  ['cancer', /암|종양|백혈병|림프/], ['brain', /뇌|중풍/], ['heart', /심장|심근|협심|허혈|심혈관|부정맥/], ['fract', /골절|화상|깁스/],
+];
+function coverCat(name) {
+  const flat = String(name || '').replace(/\s/g, '');
+  const pick = (s) => (COVER_RULES.find(([, re]) => re.test(s)) || [])[0];
+  return pick(flat.replace(/\(.*?\)|\[.*?\]/g, '')) || pick(flat) || 'etc';
+}
+
 /* ── 작은 도구들 ── */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -65,6 +86,13 @@ const manwon = (n) => {
   if (n < 10000) return `${won(n)}원`;
   const r = n % 10000;
   return `${won(Math.floor(n / 10000))}만${r ? ' ' + won(r) : ''}원`;
+};
+/** 보장 금액처럼 큰 돈: 100,000,000 → 1억원, 150,000,000 → 1억 5,000만원 */
+const bigWon = (n) => {
+  n = Math.round(n);
+  if (n < 1e8) return manwon(n);
+  const man = Math.round((n % 1e8) / 1e4);
+  return `${won(Math.floor(n / 1e8))}억${man ? ` ${won(man)}만` : ''}원`;
 };
 
 /* ── 저장소 ── */
@@ -125,8 +153,13 @@ function normalize(d) {
     ratio: p.ratio === '' || p.ratio == null || Number.isNaN(+p.ratio) ? null : +p.ratio,
     actAmt: Math.round(+p.actAmt || 0) || null, actDate: normDate(p.actDate),
     claims: (Array.isArray(p.claims) ? p.claims : []).map((c) => ({
-      id: String((c && c.id) || uid()), date: normDate(c && c.date), amount: Math.round(+(c && c.amount) || 0), memo: String((c && c.memo) || '').slice(0, 30),
+      id: String((c && c.id) || uid()), date: normDate(c && c.date), amount: Math.round(+(c && c.amount) || 0), memo: String((c && c.memo) || '').slice(0, 40),
     })).filter((c) => c.date && c.amount > 0),
+    // 보장내용: [{ id, name: '일반암 진단비', amount: 30000000(0이면 '가입'), cat: COVER_CATS 키, note: '100세 만기' }]
+    covers: (Array.isArray(p.covers) ? p.covers : []).filter((c) => c && String(c.name || '').trim()).map((c) => ({
+      id: String(c.id || uid()), name: String(c.name).trim().slice(0, 40), amount: Math.max(0, Math.round(+c.amount || 0)),
+      cat: c.cat in COVER_LABEL ? c.cat : coverCat(c.name), note: String(c.note || '').slice(0, 30),
+    })),
   }));
   const pids = new Set(policies.map((p) => p.id));
   const alarms = (Array.isArray(d.alarms) ? d.alarms : []).filter((a) => a && typeof a === 'object').map((a) => ({
@@ -250,6 +283,7 @@ function render() {
   $('#content').innerHTML = empty ? emptyHTML()
     : !live.length ? '<p class="none">등록된 보험이 없어요.</p>'
     : ui.view === 'list' ? live.slice().sort(byStatusThenPremium).map(cardHTML).join('')
+    : ui.view === 'cover' ? coverHTML(live)
     : timelineHTML(live);
   $('#events').innerHTML = empty ? '' : eventsHTML(live);
   $('#payouts').innerHTML = empty ? '' : payoutsHTML(live);
@@ -532,6 +566,7 @@ function cardHTML(p) {
       const basis = sv.act ? `보험사 확인 ${dateDot(sv.act.d)} ${won(sv.act.v)}원에서 계산` : `연 ${sv.rate}% · 낸 돈의 ${sv.ratio}% 적립 가정`;
       return `<div class="pol-sav">${basis}${sv.target ? ` · ${sv.target.label}(${ymDot(sv.target.m)}) 때 약 ${manwon(sv.target.v)}` : ''}</div>`;
     })()}
+    ${coverMiniHTML(p)}
     ${recv}
     ${p.memo ? `<div class="pol-memo">${esc(p.memo)}</div>` : ''}
   </article>`;
@@ -653,6 +688,8 @@ function openPolicy(id) {
   $('#pCopyMe').hidden = !editing || (!RO && editing.who === db.members[0].id); // 이미 내 보험이면 숨김
   renderPolicyAlarms();
   renderPolicyHistory();
+  draftCovers = [];
+  renderPolicyCovers();
   $('#p-stats').hidden = !editing;
   if (editing) { const k = calc(editing); $('#p-stats').innerHTML = amountBoxes(editing, k); }
   const showPlan = !!(editing && editing.cancelPlan && calc(editing).status !== 'cancelled');
@@ -695,6 +732,7 @@ function openClaim(cid, pid) {
   $('#c-amount').value = c ? won(c.amount) : '';
   $('#c-amount-hint').textContent = c && c.amount >= 10000 ? manwon(c.amount) : '';
   $('#c-memo').value = c ? c.memo : '';
+  syncMemoChips();
   $('#cDel').hidden = !c;
   $('#c-err').textContent = '';
   dlgC.showModal();
@@ -706,13 +744,27 @@ $('#fClaim').addEventListener('submit', (e) => {
   const amount = digits($('#c-amount').value), date = normDate($('#c-date').value);
   const err = !p ? '어느 보험인지 골라 주세요.' : !date ? '받은 날을 넣어 주세요.' : !amount ? '받은 금액을 넣어 주세요.' : '';
   if (err) { $('#c-err').textContent = err; return; }
-  const rec = { id: editingClaim ? editingClaim.c.id : uid(), date, amount, memo: $('#c-memo').value.trim().slice(0, 30) };
+  const rec = { id: editingClaim ? editingClaim.c.id : uid(), date, amount, memo: memoParts($('#c-memo').value).join(', ').slice(0, 40) };
   if (editingClaim) editingClaim.p.claims = claimsOf(editingClaim.p).filter((x) => x !== editingClaim.c);
   p.claims = [...claimsOf(p), rec];
   save(); dlgC.close(); render(); persist();
   if (dlgP.open) renderPolicyClaims();
   toast(`${editingClaim ? '고쳤어요' : '기록했어요'} · ${p.name} ${won(amount)}원`);
 });
+/* 내용 빠른 선택은 여러 개 고를 수 있다: '입원비, 수술비'. 다시 누르면 빠진다 */
+const memoParts = (v) => String(v || '').split(/\s*,\s*/).map((x) => x.trim()).filter(Boolean);
+function syncMemoChips() {
+  const on = new Set(memoParts($('#c-memo').value));
+  $$('#dlgClaim [data-memo]').forEach((b) => { b.classList.toggle('on', on.has(b.dataset.memo)); b.setAttribute('aria-pressed', String(on.has(b.dataset.memo))); });
+}
+function toggleMemo(v) {
+  const parts = memoParts($('#c-memo').value);
+  const i = parts.indexOf(v);
+  if (i >= 0) parts.splice(i, 1); else parts.push(v);
+  $('#c-memo').value = parts.join(', ').slice(0, 40);
+  syncMemoChips();
+}
+$('#c-memo').addEventListener('input', syncMemoChips);
 function deleteClaim() {
   if (!editingClaim || !confirm('이 보험금 기록을 지울까요?')) return;
   editingClaim.p.claims = claimsOf(editingClaim.p).filter((x) => x !== editingClaim.c);
@@ -731,7 +783,7 @@ function fromEnd() {
 function syncOpen() {
   const on = $('#p-open').checked;
   $('#p-years').disabled = on; $('#p-end').disabled = on;
-  $$('.quick button').forEach((b) => { b.disabled = on; });
+  $$('#fPolicy .quick button').forEach((b) => { b.disabled = on; });
 }
 function premiumHint() {
   const n = digits($('#p-premium').value);
@@ -810,7 +862,7 @@ $('#fPolicy').addEventListener('submit', (e) => {
   } else if (editing && editing.history && editing.history.length > 1) {
     editing.history[editing.history.length - 1].amount = p.premium; // 지금 보험료(마지막 기록)를 고친 것으로 본다
   }
-  if (editing) Object.assign(editing, p); else db.policies.push(p);
+  if (editing) Object.assign(editing, p); else { p.covers = draftCovers; draftCovers = []; db.policies.push(p); }
   const target = editing || p;
   const al = syncCancelAlarm(target);
   save(); dlgP.close(); render(); persist();
@@ -891,7 +943,7 @@ const CSV_COLS = [
   ['who', '피보험자'], ['insurer', '보험사'], ['name', '보험이름'], ['product', '상품명'], ['type', '종류'],
   ['premium', '납입액'], ['cycle', '납입주기'], ['start', '납입시작'], ['end', '납입끝'], ['years', '납입기간(년)'],
   ['cover', '보장만기'], ['payday', '이체일'], ['payStart', '연금시작'], ['payYears', '연금기간(년)'], ['payAmt', '월수령액'],
-  ['cancel', '해지월'], ['memo', '메모'], ['lump', '일시납'], ['lumpDate', '일시납일'],
+  ['cancel', '해지월'], ['memo', '메모'], ['lump', '일시납'], ['lumpDate', '일시납일'], ['covers', '보장내용'],
 ];
 const csvCell = (v) => { v = String(v ?? ''); return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
 const csvLine = (arr) => arr.map(csvCell).join(',');
@@ -904,6 +956,7 @@ function toCSV(policies) {
       if (key === 'who') return member(p.who).name;
       if (key === 'cycle') return p.cycle === 'Y' ? '연납' : '월납';
       if (key === 'years') return p.end && k.s != null ? +((k.e - k.s + 1) / 12).toFixed(2) : '';
+      if (key === 'covers') return coversText(p);
       return p[key] ?? '';
     })));
   }
@@ -962,6 +1015,7 @@ function importCSV(text) {
       cover: get('cover'), payday: digits(get('payday')) || null, payStart: ymStr(ym(get('payStart'))),
       payYears: parseFloat(get('payYears')) || null, payAmt: digits(get('payAmt')) || null,
       cancel: ymStr(ym(get('cancel'))), memo: get('memo'),
+      covers: parseCoverText(get('covers')).map((c) => ({ id: uid(), ...c })),
     });
     added++;
   }
@@ -1002,24 +1056,29 @@ function sample() {
   const me = { id: uid(), name: '본인', birth: 1982, slot: 0 };
   const sp = { id: uid(), name: '배우자', birth: 1985, slot: 1 };
   const kid = { id: uid(), name: '첫째', birth: 2016, slot: 2 };
-  const P = (who, insurer, name, type, premium, start, end, extra = {}) => ({ id: uid(), who: who.id, insurer, name, product: '', type, premium, cycle: 'M', start, end, cover: '', payday: null, payStart: '', payYears: null, payAmt: null, cancel: '', memo: '', ...extra });
+  // 보장내용은 '이름 금액(만원)' 짝으로 적는다
+  const C = (...pairs) => ({ covers: pairs.map(([name, man, note = '']) => ({ id: uid(), name, amount: man * 10000, cat: coverCat(name), note })) });
+  const P = (who, insurer, name, type, premium, start, end, extra = {}) => ({ id: uid(), who: who.id, insurer, name, product: '', type, premium, cycle: 'M', start, end, cover: '', payday: null, payStart: '', payYears: null, payAmt: null, cancel: '', memo: '', covers: [], ...extra });
   const out = {
     members: [me, sp, kid],
     policies: [
       P(me, '한화생명', '한화 연금', '연금', 200000, '2014-03', '2034-02', { payStart: '2042-01', payAmt: 500000, memo: '평생 받는 연금', saving: true, rate: 2.5, ratio: 93 }),
       P(me, '교보생명', '교보 변액연금', '연금', 100000, '2016-09', '2028-09', { payStart: '2047-01', payYears: 10, payAmt: 300000, lump: 6000000, memo: '처음에 600만원 일시납 + 매달 10만원', saving: true, actAmt: 19200000, actDate: '2026-10-15' }),
-      P(me, '메리츠화재', '메리츠 암보험', '암', 35000, '2013-05', '2033-04', { cover: '100세' }),
-      P(me, '동양생명', '동양 종신', '종신', 29700, '2007-08', '2027-07', { cover: '종신', memo: '자동이체 할인 -300원' }),
+      P(me, '메리츠화재', '메리츠 암보험', '암', 35000, '2013-05', '2033-04', { cover: '100세', ...C(['일반암 진단비(유사암 제외)', 3000], ['유사암 진단비', 600], ['암 수술비', 300], ['암 입원일당', 5, '1일당']) }),
+      P(me, '동양생명', '동양 종신', '종신', 29700, '2007-08', '2027-07', { cover: '종신', memo: '자동이체 할인 -300원', ...C(['일반사망', 10000, '종신'], ['재해사망', 5000]) }),
       P(me, '현대해상', '현대 실손', '실손', 38500, '2017-04', '', { history: [{ from: '', amount: 21800 }, { from: '2020-04', amount: 27400 }, { from: '2023-04', amount: 33100 }, { from: '2026-04', amount: 38500 }], claims: [
-        { id: uid(), date: '2025-08-12', amount: 132000, memo: '실손 병원비' }, { id: uid(), date: '2026-03-03', amount: 48500, memo: '통원' }] }),
-      P(me, 'DB손해보험', 'DB 운전자', '운전자', 12800, '2021-02', '2041-01'),
+        { id: uid(), date: '2025-08-12', amount: 132000, memo: '실손 병원비' }, { id: uid(), date: '2026-03-03', amount: 48500, memo: '통원' }],
+        ...C(['질병입원의료비', 5000], ['질병통원의료비', 20, '회당'], ['상해입원의료비', 5000]) }),
+      P(me, 'DB손해보험', 'DB 운전자', '운전자', 12800, '2021-02', '2041-01', C(['교통사고처리지원금', 20000], ['운전자 벌금', 2000], ['변호사선임비용', 500])),
       P(me, 'NH농협생명', '농협 정기', '정기', 45000, '2009-01', '2018-12'),
       P(me, '삼성생명', '삼성 저축', '저축', 150000, '2015-01', '2025-12', { cancel: '2020-02' }),
-      P(sp, '삼성화재', '삼성 건강', '건강', 68800, '2015-06', '2035-05', { cover: '100세', claims: [{ id: uid(), date: '2024-06-02', amount: 1000000, memo: '수술비' }] }),
-      P(sp, 'KB손해보험', 'KB 실손', '실손', 24300, '2019-10', ''),
-      P(sp, '롯데손해보험', '롯데 간병', '간병', 50000, '2023-01', '2032-12'),
-      P(kid, '현대해상', '현대 어린이', '어린이', 57650, '2016-05', '2046-04', { cover: '100세', memo: '카드 5% 할인', claims: [{ id: uid(), date: '2025-11-20', amount: 300000, memo: '입원비' }] }),
-      P(kid, '흥국화재', '흥국 치아', '치아', 18900, '2024-03', '2034-02'),
+      P(sp, '삼성화재', '삼성 건강', '건강', 68800, '2015-06', '2035-05', { cover: '100세', claims: [{ id: uid(), date: '2024-06-02', amount: 1000000, memo: '수술비' }],
+        ...C(['상해사망', 10000], ['일반암 진단비', 2000], ['뇌혈관질환 진단비', 1000], ['허혈성심장질환 진단비', 1000], ['질병 수술비', 30], ['골절 진단비', 30]) }),
+      P(sp, 'KB손해보험', 'KB 실손', '실손', 24300, '2019-10', '', C(['질병입원의료비', 5000], ['질병통원의료비', 20, '회당'])),
+      P(sp, '롯데손해보험', '롯데 간병', '간병', 50000, '2023-01', '2032-12', C(['중증치매 진단비', 2000], ['장기요양 간병비', 100, '매달'])),
+      P(kid, '현대해상', '현대 어린이', '어린이', 57650, '2016-05', '2046-04', { cover: '100세', memo: '카드 5% 할인', claims: [{ id: uid(), date: '2025-11-20', amount: 300000, memo: '입원비' }],
+        ...C(['일반암 진단비', 5000], ['뇌출혈 진단비', 2000], ['급성심근경색 진단비', 2000], ['질병 수술비', 50], ['상해 입원일당', 3, '1일당'], ['일상생활배상책임', 10000], ['골절 진단비', 50], ['질병입원의료비', 5000]) }),
+      P(kid, '흥국화재', '흥국 치아', '치아', 18900, '2024-03', '2034-02', C(['임플란트', 100, '개당'], ['크라운', 30, '개당'])),
     ],
   };
   const pid = (name) => out.policies.find((p) => p.name === name).id;
@@ -1069,7 +1128,10 @@ const OCR_MSG = {
 };
 function ocrLog(m) {
   const label = OCR_MSG[m.status];
-  if (label && dlgS.open) $('#s-busy-msg').textContent = `${ocrStage}${label}${m.progress ? ` ${Math.round(m.progress * 100)}%` : ''}`;
+  if (!label) return;
+  const t = `${ocrStage}${label}${m.progress ? ` ${Math.round(m.progress * 100)}%` : ''}`;
+  if (dlgS.open) $('#s-busy-msg').textContent = t;
+  if ($('#dlgCovers').open) $('#cvs-msg').textContent = t;
 }
 
 /** 사진 → 글자 읽기 좋은 크기의 canvas (긴 변 2400px 이하) + 작은 미리보기 */
@@ -1379,7 +1441,7 @@ function saveScan() {
     name: r.name || `${r.insurer.replace(/(생명|화재|손해보험|라이프)$/, '')} ${r.type}`.trim(),
     premium: r.premium, cycle: r.cycle, start: r.start, end: r.open ? '' : r.end,
     cover: r.cover, payday: null, payStart: r.payStart, payYears: r.payYears, payAmt: r.payAmt,
-    cancel: r.cancel, memo: r.memo, lump: r.lump || null, lumpDate: r.lumpDate || '',
+    cancel: r.cancel, memo: r.memo, lump: r.lump || null, lumpDate: r.lumpDate || '', covers: [],
   }));
   db.policies.push(...add);
   save(); dlgS.close(); render(); persist();
@@ -1639,7 +1701,7 @@ function renderMove() {
   const copy = moveMode === 'copy';
   $('#mvTitle').textContent = copy ? `‘${moving.name}’ 누구 보험으로 복사할까요?` : `‘${moving.name}’ 누구 보험으로 옮길까요?`;
   $('#mvNote').textContent = copy
-    ? '같은 내용으로 보험이 하나 더 생겨요. 받은 보험금·보험료 변경 기록·해지 예정일·확인한 적립금은 그 사람 것이라 복사하지 않아요. 복사한 뒤 금액을 고치세요.'
+    ? '같은 내용(보장내용 포함)으로 보험이 하나 더 생겨요. 받은 보험금·보험료 변경 기록·해지 예정일·확인한 적립금은 그 사람 것이라 복사하지 않아요. 복사한 뒤 금액을 고치세요.'
     : '받은 보험금과 알림도 같이 옮겨져요.';
   $('#mvList').innerHTML = db.members.map((m) => {
     const cur = m.id === moving.who;
@@ -1660,7 +1722,8 @@ function movePolicy(toId) {
 /** 복사본: 받은 보험금·보험료 변경 기록·해지 예정·확인한 적립금은 원래 사람 것이라 뺀다 */
 function makeCopy(src, who) {
   const { id, who: _w, claims, cancelPlan, actAmt, actDate, history, ...rest } = src;
-  return { ...JSON.parse(JSON.stringify(rest)), id: uid(), who, claims: [], history: [], cancelPlan: '', actAmt: null, actDate: '' };
+  return { ...JSON.parse(JSON.stringify(rest)), id: uid(), who, claims: [], history: [], cancelPlan: '', actAmt: null, actDate: '',
+    covers: coversOf(src).map((c) => ({ ...c, id: uid() })) }; // 보장내용은 같은 상품이라 그대로 복사
 }
 function copyPolicy(toId) {
   const to = db.members.find((m) => m.id === toId);
@@ -2080,6 +2143,299 @@ function delPrem(t) {
   save(); render(); refreshPolicySheet();
 }
 
+/* ── 보장내용 ──
+ * 보험마다 covers: [{ id, name, amount, cat, note }]. 금액 0은 '가입'(실손처럼 금액보다 가입 여부가 중요한 것).
+ * '보장 한눈에'는 분류(사망·암·뇌·심장·실손 …) × 가족 표로 더해서 보여 준다. 실손은 여러 개여도 나눠 받으므로 더하지 않고 가장 큰 한도. */
+const coversOf = (p) => p.covers || [];
+const covWon = (c) => (c.amount ? bigWon(c.amount) : '가입');
+const coverOrder = (a, b) => CAT_IDX[a.cat] - CAT_IDX[b.cat] || b.amount - a.amount;
+const catOptions = (sel) => COVER_CATS.map(([k, l]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${l}</option>`).join('');
+/** CSV 칸: '일반암 진단비 3,000만원; 질병통원의료비 20만원 (회당)' — 불러올 때 parseCoverText 로 다시 읽는다 */
+const coversText = (p) => coversOf(p).map((c) => `${c.name} ${covWon(c)}${c.note ? ` (${c.note})` : ''}`).join('; ');
+
+/** 보험별 상세 카드에 붙는 짧은 보장 목록 */
+function coverMiniHTML(p) {
+  const cs = coversOf(p).slice().sort(coverOrder);
+  if (!cs.length) return '';
+  const top = cs.slice(0, 4);
+  return `<ul class="pol-cov" aria-label="보장내용">${top.map((c) => `<li><span>${esc(c.name)}</span><b>${c.amount ? short(c.amount) : '가입'}</b></li>`).join('')}${cs.length > top.length ? `<li class="more">외 ${cs.length - top.length}개 보장</li>` : ''}</ul>`;
+}
+
+const openCats = new Set(); // '보장 한눈에'에서 펼친 줄
+function coverHTML(list) {
+  const people = ui.who === 'all' ? db.members.filter((m) => list.some((p) => p.who === m.id)) : [member(ui.who)];
+  const multi = people.length > 1;
+  const cell = {}; // 분류 → 사람 → { sum, max, items }
+  for (const p of list) for (const c of coversOf(p)) {
+    const row = (cell[c.cat] = cell[c.cat] || {});
+    const x = (row[p.who] = row[p.who] || { sum: 0, max: 0, items: [] });
+    x.sum += c.amount; x.max = Math.max(x.max, c.amount); x.items.push({ p, c });
+  }
+  const mine = (m) => list.filter((p) => p.who === m.id);
+  const entered = (m) => mine(m).filter((p) => coversOf(p).length).length;
+  const mediPols = (m) => mine(m).filter((p) => p.type === '실손' && !coversOf(p).some((c) => c.cat === 'medi')); // 보장내용 없이 종류만 실손
+  const noCov = list.filter((p) => !coversOf(p).length);
+  const nAll = list.length, nIn = nAll - noCov.length;
+
+  if (!Object.keys(cell).length) {
+    return `<div class="card cov-card"><h3>보장 한눈에</h3>
+      <p class="note">보험마다 보장내용(상해사망 1억원, 암 진단비 3,000만원 …)을 넣으면 ${multi ? '가족마다 ' : ''}사망·암·뇌·심장·실손 보장이 얼마인지, 빠진 보장은 없는지 한 표로 보여 드려요.</p>
+      ${RO ? '' : '<p class="sub">아래 보험을 눌러 ‘보장내용’에서 ＋ 추가하거나, 보험증권 사진·복사한 글자로 한꺼번에 넣으세요.</p>'}</div>
+      ${noCoverHTML(noCov, true)}`;
+  }
+
+  const td = (k, core, m) => {
+    const x = cell[k] && cell[k][m.id];
+    if (x) {
+      const v = k === 'medi' ? x.max : x.sum;
+      return `<td>${v ? short(v) : '가입'}${x.items.length > 1 && k !== 'medi' ? `<small>${x.items.length}개</small>` : ''}</td>`;
+    }
+    if (k === 'medi' && mediPols(m).length) return '<td>가입</td>';
+    if (!entered(m)) return '<td class="none">·</td>';
+    return core ? '<td class="gap">없음</td>' : '<td class="none">—</td>';
+  };
+  const order = new Map(db.members.map((m, i) => [m.id, i]));
+  const body = COVER_CATS.filter(([k, , core]) => cell[k] || core || (k === 'medi' && people.some((m) => mediPols(m).length))).map(([k, label, core, unit]) => {
+    const items = people.flatMap((m) => (cell[k] && cell[k][m.id] ? cell[k][m.id].items : []))
+      .sort((a, b) => order.get(a.p.who) - order.get(b.p.who) || b.c.amount - a.c.amount);
+    const extra = k === 'medi' ? people.flatMap(mediPols) : [];
+    const open = openCats.has(k);
+    const li = items.map(({ p, c }) => `<li data-id="${p.id}" role="button" tabindex="0"><span><b>${esc(c.name)}</b>
+        <small>${esc(p.name)}${multi ? ` · ${esc(member(p.who).name)}` : ''}${c.note ? ` · ${esc(c.note)}` : ''}</small></span><em>${covWon(c)}</em></li>`)
+      .concat(extra.map((p) => `<li data-id="${p.id}" role="button" tabindex="0"><span><b>${esc(p.name)}</b>
+        <small>종류가 실손${multi ? ` · ${esc(member(p.who).name)}` : ''} · 보장내용을 넣으면 한도가 보여요</small></span><em>가입</em></li>`)).join('');
+    return `<tr class="cov-r${open ? ' open' : ''}" data-cat="${k}" role="button" tabindex="0" aria-expanded="${open}">
+        <th scope="row">${label}${unit ? `<small>${unit}</small>` : ''}</th>${people.map((m) => td(k, core, m)).join('')}</tr>
+      <tr class="cov-d"${open ? '' : ' hidden'}><td colspan="${people.length + 1}">${li ? `<ol class="covd">${li}</ol>` : `<p class="sub">넣은 보장 중에 ${label} 보장이 없어요.</p>`}</td></tr>`;
+  }).join('');
+
+  return `<div class="card cov-card">
+    <div class="card-h"><h3>보장 한눈에</h3><small class="cov-cnt">보장내용 넣은 보험 ${nIn}/${nAll}건</small></div>
+    <div class="cov-scroll"><table class="cov">
+      <thead><tr><th scope="col"><span class="cov-k">보장</span></th>${people.map((m) => `<th scope="col" style="--c:var(--m${m.slot})"><span><i></i>${esc(m.name)}</span>${entered(m) < mine(m).length ? `<small>${entered(m)}/${mine(m).length}건 입력</small>` : ''}</th>`).join('')}</tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>
+    <p class="sub cov-foot">줄을 누르면 어느 보험의 어떤 보장인지 보여요. 진단비·사망 등은 여러 보험을 더한 금액이고, 입원비는 하루 금액, 실손은 여러 개여도 실제 병원비를 나눠 받아서 가장 큰 한도를 보여 줘요.${nIn < nAll ? ' 보장내용을 안 넣은 보험은 빠져 있어요.' : ''}</p>
+  </div>${noCoverHTML(noCov, false)}`;
+}
+function noCoverHTML(ps, first) {
+  if (!ps.length) return '';
+  const multi = ui.who === 'all' && db.members.length > 1;
+  return `<div class="card"><h3>${first ? '보장내용을 넣을 보험' : '보장내용을 안 넣은 보험'} <small class="cov-cnt">${ps.length}건</small></h3>
+    <p class="sub">연금·저축처럼 따로 보장이 없는 보험은 안 넣어도 돼요.</p>
+    <ol class="ev nocov">${ps.map((p) => `<li data-covpol="${p.id}" role="button" tabindex="0"><span class="ev-n"><b>${esc(p.name)}</b>
+      <small>${esc(p.insurer)} · ${esc(p.type)}${multi ? ` · ${esc(member(p.who).name)}` : ''}</small></span><span class="ev-a">${RO ? '›' : '＋ 넣기'}</span></li>`).join('')}</ol></div>`;
+}
+function toggleCat(tr) {
+  const k = tr.dataset.cat, open = !openCats.has(k);
+  if (open) openCats.add(k); else openCats.delete(k);
+  tr.classList.toggle('open', open);
+  tr.setAttribute('aria-expanded', String(open));
+  if (tr.nextElementSibling) tr.nextElementSibling.hidden = !open;
+}
+
+/* 보험 화면의 보장내용 칸. 새 보험은 저장할 때 같이 저장(draftCovers), 있던 보험은 바로 저장 */
+let draftCovers = [];
+const coverList = () => (editing ? (editing.covers = editing.covers || []) : draftCovers);
+function renderPolicyCovers() {
+  const cs = coverList().slice().sort(coverOrder);
+  const sum = (k) => cs.filter((c) => c.cat === k).reduce((a, c) => a + c.amount, 0);
+  const tops = ['death', 'cancer', 'brain', 'heart'].filter((k) => sum(k)).map((k) => `${COVER_LABEL[k]} ${short(sum(k))}`);
+  $('#p-covers').innerHTML = `<div class="card-h"><b>보장내용${cs.length ? ` · ${cs.length}개` : ''}</b>
+    <span class="links"><button type="button" class="link" data-act="pasteCovers">📋 한꺼번에</button><button type="button" class="link" data-act="addCover">＋ 추가</button></span></div>
+    ${tops.length ? `<p class="sub">${tops.join(' · ')}</p>` : ''}
+    ${cs.length ? `<ol class="ev cov">${cs.map((c) => `<li data-cover="${c.id}" role="button" tabindex="0">
+      <span class="ev-n"><b>${esc(c.name)}</b><small>${COVER_LABEL[c.cat]}${c.note ? ` · ${esc(c.note)}` : ''}</small></span>
+      <span class="ev-a">${covWon(c)}</span></li>`).join('')}</ol>`
+    : RO ? '<p class="sub">넣은 보장내용이 없어요.</p>'
+    : '<p class="sub">‘일반암 진단비 3,000만원’처럼 보장과 금액을 넣으면 ‘보장 한눈에’에서 가족별로 모아 보여 줘요. 보험증권 사진이나 복사한 글자로 한꺼번에 넣을 수도 있어요.</p>'}`;
+}
+function coversChanged() {
+  if (editing) { save(); render(); }
+  renderPolicyCovers();
+}
+
+/* 보장 하나 추가 / 수정 */
+let editingCover = null, cvCatTouched = false;
+const dlgCv = $('#dlgCover');
+function cvAmountHint() { const n = digits($('#cv-amount').value); $('#cv-amount-hint').textContent = n >= 10000 ? bigWon(n) : ''; }
+function resetCoverForm(c) {
+  editingCover = c || null;
+  $('#cvTitle').textContent = c ? '보장 수정' : '보장 추가';
+  $('#cv-name').value = c ? c.name : '';
+  $('#cv-amount').value = c && c.amount ? won(c.amount) : '';
+  $('#cv-cat').value = c ? c.cat : 'etc';
+  $('#cv-note').value = c ? c.note : '';
+  cvCatTouched = !!c;
+  $('#cvDel').hidden = !c; $('#cvNext').hidden = !!c;
+  $('#cv-err').textContent = '';
+  cvAmountHint();
+}
+function openCover(id) {
+  resetCoverForm(id ? coverList().find((c) => c.id === id) : null);
+  dlgCv.showModal();
+}
+function submitCover(next) {
+  if (RO) return;
+  const name = $('#cv-name').value.trim().slice(0, 40), amount = digits($('#cv-amount').value);
+  if (!name) { $('#cv-err').textContent = '보장 이름을 넣어 주세요.'; $('#cv-name').focus(); return; }
+  const rec = { id: editingCover ? editingCover.id : uid(), name, amount, cat: $('#cv-cat').value, note: $('#cv-note').value.trim().slice(0, 30) };
+  if (editingCover) Object.assign(editingCover, rec); else coverList().push(rec);
+  coversChanged();
+  toast(`${editingCover ? '고쳤어요' : '넣었어요'} · ${name} ${covWon(rec)}`);
+  if (next) { resetCoverForm(null); $('#cv-name').focus(); } else dlgCv.close();
+}
+function deleteCover() {
+  if (!editingCover || !confirm(`‘${editingCover.name}’ 보장을 지울까요?`)) return;
+  const list = coverList();
+  list.splice(list.indexOf(editingCover), 1);
+  coversChanged(); dlgCv.close();
+}
+$('#fCover').addEventListener('submit', (e) => { e.preventDefault(); submitCover(false); });
+$('#cv-name').addEventListener('input', () => { if (!cvCatTouched) $('#cv-cat').value = coverCat($('#cv-name').value); });
+$('#cv-cat').addEventListener('change', () => { cvCatTouched = true; });
+$('#cv-cat').innerHTML = catOptions('etc');
+
+/* ── 보장내용 한꺼번에: 증권 사진(폰 안 OCR) 또는 붙여넣은 글자 → 줄마다 '이름 금액' ── */
+/** 금액 글자 → 원. '1억 5천만원' '3,000만원' '30,000,000원' '5백만' '1.5억' (OCR이 쉼표를 점으로 읽은 '30.000.000'도) */
+function wonOf(str) {
+  let s = String(str || '').replace(/(\d)\.(?=\d{3}(?!\d))/g, '$1').replace(/[,\s]/g, '');
+  s = s.replace(/(^|[^\d.])([천백])(?=만|억)/g, '$11$2');
+  let t = 0;
+  for (const m of s.matchAll(/(\d+(?:\.\d+)?)([천백십])?(억|만)?/g)) t += +m[1] * ({ 천: 1e3, 백: 100, 십: 10 }[m[2]] || 1) * ({ 억: 1e8, 만: 1e4 }[m[3]] || 1);
+  return Math.round(t);
+}
+const AMT_RE = /\d[\d,.]*\s*억(?:\s*\d[\d,.]*\s*[천백]?\s*만)?(?:\s*\d[\d,.]*\s*원|\s*원)?|(?:\d[\d,.]*\s*[천백]?|[천백])\s*만(?![기료족])(?:\s*\d[\d,.]*\s*원|\s*원)?|\d{1,3}(?:[,.]\d{3})+(?:\s*원)?|\d+\s*원/g;
+const COVER_SKIP = /^(월|연)?(보험료|합계|총(보험료|납입|합계)|계약자|피보험자|수익자|증권|계좌|이체|납입|보험기간|계약일|청약|주소|전화|만기환급|해지환급|적립금|가입금액|보장금액|보험금액|보장내용|담보|구분|상품명)/;
+const NOTE_RE = /\d{1,3}\s*세\s*(?:만기|까지)|\d{1,2}\s*년\s*(?:만기|갱신|납)|비갱신형?|갱신형|전기납/g;
+/** OCR이 '일 반 암 진 단 비'처럼 한 글자씩 띄운 것을 붙인다 */
+function fixSpacing(s) {
+  const tk = s.split(' ');
+  return tk.length >= 3 && tk.filter((t) => /^[가-힣]$/.test(t)).length / tk.length >= 0.6 ? tk.join('') : s;
+}
+function parseCoverText(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n|[;；]/)) {
+    const line = raw.replace(/\s+/g, ' ').trim();
+    if (!/[가-힣]/.test(line)) continue;
+    const cands = [...line.matchAll(AMT_RE)].map((m) => ({ i: m.index, len: m[0].length, v: wonOf(m[0]) })).filter((c) => c.v >= 100);
+    let name, rest, amount;
+    if (cands.length) { // 증권 표는 보통 '보장 이름 | 가입금액 | 기간 | 보험료' 순서라 이름 바로 뒤 첫 금액을 쓴다
+      const c = cands[0];
+      name = line.slice(0, c.i); rest = line.slice(c.i + c.len); amount = c.v;
+      if (!/[가-힣]{2}/.test(name.replace(/\s/g, ''))) { name = rest.replace(AMT_RE, ' '); rest = ''; } // 금액이 앞에 온 줄
+    } else if (/\s가입$/.test(line)) { name = line.replace(/\s가입$/, ''); rest = ''; amount = 0; }
+    else continue;
+    const notes = [];
+    name = name.replace(NOTE_RE, (m) => { notes.push(m.replace(/\s/g, '')); return ' '; });
+    const paren = rest.match(/\(([^)]{1,30})\)/);
+    if (paren) notes.unshift(paren[1].trim());
+    else for (const m of rest.match(NOTE_RE) || []) notes.push(m.replace(/\s/g, ''));
+    name = fixSpacing(name.replace(/\(\s*\)/g, ' ')
+      .replace(/^\s*(?:\d{1,2}[.)]|\d{1,2}\s(?=[가-힣])|[①-⑳•·*\-–])\s*/, '')
+      .replace(/^[[(]?(?:주계약|기본계약|선택\s*특약|특약)[\])]?\s*/, '')
+      .replace(/(보험)?(가입|보장)\s*금액/g, ' ')
+      .replace(/[\s:：\-–—·|=]+$/, '').replace(/\s+/g, ' ').trim()).slice(0, 40);
+    const flat = name.replace(/\s/g, '');
+    if (flat.length < 2 || !/[가-힣]/.test(name) || COVER_SKIP.test(flat)) continue;
+    out.push({ name, amount, cat: coverCat(name), note: [...new Set(notes)].join(' ').slice(0, 30) });
+  }
+  return out;
+}
+
+const dlgCvs = $('#dlgCovers');
+let cvRows = [], cvRun = null;
+function coverStep(name) { $$('#dlgCovers [data-cstep]').forEach((el) => { el.hidden = el.dataset.cstep !== name; }); }
+function openCovers() {
+  $('#cvs-text').value = ''; $('#cvs-err').textContent = ''; $('#cvs-busy').hidden = true;
+  $('#cvs-h').textContent = `${editing ? `‘${editing.name}’ ` : ''}보장내용 한꺼번에 넣기`;
+  coverStep('input');
+  dlgCvs.showModal();
+}
+function parseCovers() {
+  const found = parseCoverText($('#cvs-text').value);
+  if (!found.length) {
+    $('#cvs-err').textContent = $('#cvs-text').value.trim()
+      ? '보장을 찾지 못했어요. 한 줄에 ‘이름 금액’으로 적어 주세요. 예: 일반암 진단비 3,000만원'
+      : '사진을 고르거나 글자를 붙여넣어 주세요.';
+    return;
+  }
+  const have = new Set(coverList().map((c) => c.name.replace(/\s/g, '')));
+  cvRows = found.map((r) => { const dup = have.has(r.name.replace(/\s/g, '')); return { ...r, on: !dup, dup, touched: false }; });
+  $('#cvs-err').textContent = '';
+  renderCoverRows();
+  coverStep('review');
+}
+function renderCoverRows() {
+  $('#cvs-title').textContent = `보장 ${cvRows.length}개를 찾았어요`;
+  $('#cvs-rows').innerHTML = cvRows.map((r, i) => `<div class="crow${r.on ? '' : ' off'}" data-i="${i}">
+    <label class="crow-on"><input type="checkbox" data-c="on"${r.on ? ' checked' : ''} aria-label="넣기"></label>
+    <input class="crow-name" data-c="name" value="${esc(r.name)}" maxlength="40" aria-label="보장 이름">
+    <div class="crow-2"><input class="money" data-c="amount" inputmode="numeric" value="${r.amount ? won(r.amount) : ''}" placeholder="가입" aria-label="금액">
+      <select data-c="cat" aria-label="분류">${catOptions(r.cat)}</select></div>
+    ${r.dup ? '<small class="crow-dup">이미 넣은 보장이라 빼 두었어요</small>' : ''}
+  </div>`).join('');
+  updateCoverCount();
+}
+function updateCoverCount() {
+  const n = cvRows.filter((r) => r.on).length;
+  $('#cvs-save').textContent = n ? `${n}개 넣기` : '넣기';
+  $('#cvs-save').disabled = !n;
+}
+function saveCovers() {
+  if (RO) return;
+  const add = cvRows.filter((r) => r.on && r.name.trim()).map((r) => ({ id: uid(), name: r.name.trim().slice(0, 40), amount: r.amount, cat: r.cat, note: r.note }));
+  if (!add.length) return;
+  coverList().push(...add);
+  coversChanged(); dlgCvs.close();
+  toast(`보장 ${add.length}개를 넣었어요. 틀린 건 눌러서 고치세요.`);
+}
+$('#cvs-rows').addEventListener('input', (e) => {
+  const el = e.target, row = el.closest('[data-i]');
+  if (!row || !el.dataset.c) return;
+  const r = cvRows[+row.dataset.i], f = el.dataset.c;
+  if (f === 'on') { r.on = el.checked; row.classList.toggle('off', !r.on); updateCoverCount(); }
+  else if (f === 'amount') r.amount = digits(el.value);
+  else if (f === 'cat') { r.cat = el.value; r.touched = true; }
+  else if (f === 'name') { r.name = el.value; if (!r.touched) { r.cat = coverCat(r.name); $('[data-c=cat]', row).value = r.cat; } }
+});
+$('#cvs-rows').addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') e.target.dispatchEvent(new Event('input', { bubbles: true })); });
+
+/** 증권 사진 → 글자 (보험 등록용과 같은 폰 안 인식기를 쓴다) → 붙여넣기 칸에 넣고 바로 찾기 */
+async function coverOcr(files) {
+  files = [...files].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name)).slice(0, MAX_PHOTOS);
+  if (!files.length) return;
+  const run = { cancel: false };
+  cvRun = run;
+  $('#cvs-busy').hidden = false; $('#cvs-err').textContent = '';
+  $('#cvs-msg').textContent = '사진 준비 중…';
+  try {
+    const pics = [];
+    for (const f of files) pics.push(await prepCanvas(f));
+    const w = await getOcr();
+    let text = '';
+    for (let i = 0; i < pics.length; i++) {
+      if (run.cancel) return;
+      ocrStage = pics.length > 1 ? `사진 ${i + 1}/${pics.length} · ` : '';
+      const { data } = await w.recognize(pics[i].canvas);
+      text += `${data.text}\n`;
+    }
+    if (run.cancel) return;
+    $('#cvs-busy').hidden = true;
+    const cur = $('#cvs-text').value.trim();
+    $('#cvs-text').value = `${cur ? `${cur}\n` : ''}${text.trim()}`;
+    parseCovers();
+    if (!dlgCvs.querySelector('[data-cstep=review]').hidden) $('#cvs-title').textContent += ' · 숫자를 꼭 확인하세요';
+    else $('#cvs-err').textContent = '사진에서 보장을 찾지 못했어요. 읽은 글자를 고치거나, 삼성 갤러리 텍스트 추출·Google 렌즈로 복사해 붙여넣어 보세요.';
+  } catch (err) {
+    if (run.cancel) return;
+    $('#cvs-busy').hidden = true;
+    $('#cvs-err').textContent = (err && err.message) || '사진을 읽지 못했어요.';
+  }
+}
+$('#coverFile').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; coverOcr(fs); });
+dlgCvs.addEventListener('close', () => { if (cvRun) cvRun.cancel = true; $('#cvs-busy').hidden = true; });
+
 /* ── 버튼들 ── */
 const actions = {
   add: () => openPolicy(null),
@@ -2104,6 +2460,14 @@ const actions = {
   addPrem: openPrem,
   editPrem,
   delPrem,
+  addCover: () => openCover(null),
+  saveCoverNext: () => submitCover(true),
+  deleteCover,
+  pasteCovers: openCovers,
+  coverPhoto: () => $('#coverFile').click(),
+  parseCovers,
+  coverBack: () => coverStep('input'),
+  saveCovers,
   openShare,
   saveCfg: () => {
     const cfg = parseCfg($('#fbcfg').value);
@@ -2145,8 +2509,9 @@ const actions = {
   exportCsv: () => saveFile(`insurance-list-${stamp()}.csv`, toCSV(db.policies), 'text/csv'),
   csvTemplate: () => saveFile('insurance-template.csv', '﻿' + [
     csvLine(CSV_COLS.map((c) => c[1])),
-    csvLine(['본인', '교보생명', '교보 변액연금', '', '연금', '100000', '월납', '2016-09-25', '', '12', '', '25', '2047-01', '10', '300000', '', '처음에 600만원 일시납', '6000000', '2016-09-25']),
-    csvLine(['아내', '현대해상', '현대 실손', '', '실손', '38500', '월납', '2017-04', '', '', '', '', '', '', '', '', '갱신형은 납입끝·기간을 비워 두세요']),
+    csvLine(['본인', '교보생명', '교보 변액연금', '', '연금', '100000', '월납', '2016-09-25', '', '12', '', '25', '2047-01', '10', '300000', '', '처음에 600만원 일시납', '6000000', '2016-09-25', '일반사망 5,000만원']),
+    csvLine(['아내', '현대해상', '현대 실손', '', '실손', '38500', '월납', '2017-04', '', '', '', '', '', '', '', '', '갱신형은 납입끝·기간을 비워 두세요', '', '',
+      '질병입원의료비 5,000만원; 질병통원의료비 20만원 (회당); 상해입원의료비 5,000만원']),
   ].join('\r\n'), 'text/csv'),
   import: () => $('#fileIn').click(),
   sample: () => {
@@ -2163,14 +2528,15 @@ const actions = {
 // 보기만 하는 중에는 막는 버튼들 (캘린더에 넣기 · 내보내기 · 공유 화면은 된다)
 const MUTATE = new Set(['add', 'scan', 'pickPhoto', 'pasteMode', 'editText', 'parsePaste', 'saveScan', 'calcRemain', 'deletePolicy',
   'addMember', 'deleteMember', 'addClaim', 'addClaimHere', 'deleteClaim', 'addAlarm', 'addAlarmHere', 'deleteAlarm',
-  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe', 'addPrem', 'editPrem', 'delPrem', 'copyPolicy']);
+  'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe', 'addPrem', 'editPrem', 'delPrem', 'copyPolicy',
+  'addCover', 'saveCoverNext', 'deleteCover', 'pasteCovers', 'coverPhoto', 'parseCovers', 'saveCovers']);
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto]');
+  const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto],[data-cover],[data-cat],[data-covpol],[data-cvname],[data-cvadd]');
   if (!t) return;
   if (t.hasAttribute('data-close')) { t.closest('dialog').close(); return; }
   if (RO && ((t.dataset.act && MUTATE.has(t.dataset.act)) || t.dataset.move || t.dataset.moveto || t.dataset.member
-    || t.dataset.claim || t.dataset.alarm || t.dataset.years || t.dataset.preset || t.dataset.memo)) {
+    || t.dataset.claim || t.dataset.alarm || t.dataset.years || t.dataset.preset || t.dataset.memo || t.dataset.cover || t.dataset.cvname || 'cvadd' in t.dataset)) {
     toast('보기만 할 수 있어요. 고치는 건 장부 주인만 할 수 있어요.');
     return;
   }
@@ -2184,23 +2550,42 @@ document.addEventListener('click', (e) => {
   if (t.dataset.ics) { const a = (db.alarms || []).find((x) => x.id === t.dataset.ics); if (a) downloadIcs([a]); return; }
   if (t.dataset.alarm) { openAlarm(t.dataset.alarm); return; }
   if (t.dataset.preset) { alarmPreset(t.dataset.preset); return; }
-  if (t.dataset.memo) { $('#c-memo').value = t.dataset.memo; return; }
+  if (t.dataset.memo) { toggleMemo(t.dataset.memo); return; }
+  if (t.dataset.cat) { toggleCat(t); return; }
+  if (t.dataset.cover) { openCover(t.dataset.cover); return; }
+  if (t.dataset.covpol) { openPolicy(t.dataset.covpol); $('#p-covers').scrollIntoView({ block: 'start' }); return; }
+  if (t.dataset.cvname) {
+    $('#cv-name').value = t.dataset.cvname;
+    if (!cvCatTouched) $('#cv-cat').value = coverCat(t.dataset.cvname);
+    $('#cv-amount').focus();
+    return;
+  }
+  if ('cvadd' in t.dataset) {
+    const n = +t.dataset.cvadd;
+    $('#cv-amount').value = n ? won(digits($('#cv-amount').value) + n) : '';
+    cvAmountHint();
+    return;
+  }
   if (t.dataset.act) { actions[t.dataset.act](t); return; }
   if (t.dataset.id) openPolicy(t.dataset.id);
 });
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-move],[role=button][data-id],[role=button][data-claim],[role=button][data-act],[role=button][data-alarm],[role=button][data-ics]')) { e.preventDefault(); e.target.click(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-move],[role=button][data-id],[role=button][data-claim],[role=button][data-act],[role=button][data-alarm],[role=button][data-ics],[role=button][data-cover],[role=button][data-cat],[role=button][data-covpol]')) { e.preventDefault(); e.target.click(); }
 });
 // 시트 바깥(어두운 부분)을 누르면 닫기
 $$('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));
 
-$$('input.money').forEach((el) => el.addEventListener('input', () => {
+// 금액 칸: 칠 때마다 쉼표를 넣는다 (나중에 생기는 칸도 되게 문서 전체에서 받는다)
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || !el.classList.contains('money')) return;
   const n = digits(el.value); el.value = n ? won(n) : '';
   if (el.id === 'p-premium') premiumHint();
   if (el.id === 'c-amount') $('#c-amount-hint').textContent = n >= 10000 ? manwon(n) : '';
   if (el.id === 'p-lump') $('#p-lump-hint').textContent = n >= 10000 ? manwon(n) : '';
   if (el.id === 'ph-amount') $('#ph-amount-hint').textContent = n >= 10000 ? manwon(n) : '';
-}));
+  if (el.id === 'cv-amount') cvAmountHint();
+}, true);
 $('#p-years').addEventListener('input', fromYears);
 $('#p-end').addEventListener('change', fromEnd);
 // 새 보험에서 종류를 연금·저축으로 고르면 적립금 계산을 켜 둔다
