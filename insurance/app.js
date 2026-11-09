@@ -692,16 +692,27 @@ function openPolicy(id) {
   renderPolicyCovers();
   $('#p-stats').hidden = !editing;
   if (editing) { const k = calc(editing); $('#p-stats').innerHTML = amountBoxes(editing, k); }
-  const showPlan = !!(editing && editing.cancelPlan && calc(editing).status !== 'cancelled');
-  $('#p-cplan').hidden = !showPlan;
-  if (showPlan) $('#p-cplan').innerHTML = `<span>✂ 해지 예정 <b>${dateDot(editing.cancelPlan)}</b> · ${cancelDday(editing.cancelPlan)}</span><button type="button" class="btn" data-act="markCancelled">해지했어요</button>`;
+  const gone = !!(editing && editing.cancel), showPlan = !!(editing && editing.cancelPlan && !gone);
+  $('#p-cplan').hidden = !showPlan && !gone;
+  $('#p-cplan').classList.toggle('done', gone);
+  if (showPlan) $('#p-cplan').innerHTML = `<span>✂ 해지 예정 <b>${dateDot(editing.cancelPlan)}</b> · ${cancelDday(editing.cancelPlan)}</span>
+    <span class="cplan-b"><button type="button" class="btn alt" data-act="pickDate" data-for="p-cancelPlan">날짜 바꾸기</button><button type="button" class="btn" data-act="markCancelled">해지했어요</button></span>`;
+  else if (gone) $('#p-cplan').innerHTML = `<span>${calc(editing).status === 'cancelled' ? '해지한 보험' : '해지 예정'} · <b>${ymDot(ym(editing.cancel))}</b> 해지</span>
+    <span class="cplan-b"><button type="button" class="btn alt" data-act="pickDate" data-for="p-cancel">달 바꾸기</button><button type="button" class="btn" data-act="undoCancel">해지 취소</button></span>`;
   renderPolicyClaims();
   $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
-  fromEnd(); syncOpen(); premiumHint();
-  if (RO) { $$('#fPolicy input, #fPolicy select, #fPolicy textarea').forEach((el) => { el.disabled = true; }); $('#p-more').open = true; }
+  $$('#fPolicy input, #fPolicy select, #fPolicy textarea').forEach((el) => { el.disabled = RO; }); // 보기만 하는 중에만 잠근다
+  fromEnd(); syncOpen(); premiumHint(); syncClearBtns();
+  if (RO) $('#p-more').open = true;
   dlgP.showModal();
 }
+
+/** 날짜 칸 옆 '지우기': 폰 날짜 고르기 창에 지우는 버튼이 없을 때도 지울 수 있게 */
+function syncClearBtns() {
+  $$('#fPolicy [data-act=clearDate]').forEach((b) => { const el = $(`#${b.dataset.for}`); b.hidden = RO || !el.value; });
+}
+['p-cancelPlan', 'p-cancel'].forEach((id) => { $(`#${id}`).addEventListener('input', syncClearBtns); $(`#${id}`).addEventListener('change', syncClearBtns); });
 
 function renderPolicyClaims() {
   const el = $('#p-claims');
@@ -2486,6 +2497,19 @@ const actions = {
   joinShare: shareAct(doJoin),
   cancelJoin: () => { pendingJoin = null; dlgSh.close(); },
   leaveShare: shareAct(leaveShare),
+  clearDate: (t) => { const el = $(`#${t.dataset.for}`); el.value = ''; syncClearBtns(); el.focus(); },
+  pickDate: (t) => {
+    const el = $(`#${t.dataset.for}`);
+    if (el.closest('details')) el.closest('details').open = true;
+    el.scrollIntoView({ block: 'center' });
+    try { el.showPicker(); } catch { el.focus(); }
+  },
+  undoCancel: () => {
+    if (!editing || !confirm(`‘${editing.name}’ 해지를 취소할까요?\n다시 내는 중인 보험으로 돌아가요.`)) return;
+    editing.cancel = '';
+    save(); dlgP.close(); render();
+    toast(`‘${editing.name}’ 해지를 취소했어요.`);
+  },
   markCancelled: () => {
     if (!editing || !confirm(`‘${editing.name}’을(를) 이번 달에 해지한 것으로 할까요?\n합계에서 빠지고 ‘해지한 보험’으로 옮겨요.`)) return;
     editing.cancel = ymStr(NOW); editing.cancelPlan = '';
@@ -2529,7 +2553,7 @@ const actions = {
 const MUTATE = new Set(['add', 'scan', 'pickPhoto', 'pasteMode', 'editText', 'parsePaste', 'saveScan', 'calcRemain', 'deletePolicy',
   'addMember', 'deleteMember', 'addClaim', 'addClaimHere', 'deleteClaim', 'addAlarm', 'addAlarmHere', 'deleteAlarm',
   'markCancelled', 'movePolicy', 'import', 'csvTemplate', 'sample', 'wipe', 'addPrem', 'editPrem', 'delPrem', 'copyPolicy',
-  'addCover', 'saveCoverNext', 'deleteCover', 'pasteCovers', 'coverPhoto', 'parseCovers', 'saveCovers']);
+  'addCover', 'saveCoverNext', 'deleteCover', 'pasteCovers', 'coverPhoto', 'parseCovers', 'saveCovers', 'clearDate', 'pickDate', 'undoCancel']);
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act],[data-who],[data-view],[data-id],[data-member],[data-close],[data-years],[data-claim],[data-memo],[data-ics],[data-alarm],[data-preset],[data-move],[data-moveto],[data-cover],[data-cat],[data-covpol],[data-cvname],[data-cvadd]');

@@ -91,7 +91,10 @@
     <label>납입 끝 <small>마지막 내는 달</small><input id="p-end" type="month" placeholder="2038-02"></label>
     <label class="check"><input id="p-open" type="checkbox"><span>갱신형 · 끝 없음<small>실손처럼 계속 내는 보험</small></span></label>
   </div>
-  <label>해지할 날짜 <small>선택 · 적어 두면 일주일 전과 그날 알려 드려요</small><input id="p-cancelPlan" type="date"></label>
+  <div class="field">
+    <label for="p-cancelPlan">해지할 날짜 <small>선택 · 적어 두면 일주일 전과 그날 알려 드려요</small></label>
+    <div class="datebox"><input id="p-cancelPlan" type="date"><button type="button" class="btn clr" data-act="clearDate" data-for="p-cancelPlan" hidden>지우기</button></div>
+  </div>
 
   <details class="helper" id="p-helper">
     <summary>보험 앱에 ‘○% 납부 · ○원 남음’만 보이나요?</summary>
@@ -133,7 +136,10 @@
       <label>기간<span class="unit"><input id="p-payYears" type="number" inputmode="numeric" min="0" placeholder="종신">년</span></label>
       <label>월 수령액<input id="p-payAmt" class="money" inputmode="numeric" placeholder="0"></label>
     </div>
-    <label>해지한 달 <small>넣으면 합계에서 빠지고 아래 ‘해지한 보험’으로 가요</small><input id="p-cancel" type="month" placeholder="2020-01"></label>
+    <div class="field">
+      <label for="p-cancel">해지한 달 <small>넣으면 합계에서 빠지고 아래 ‘해지한 보험’으로 가요</small></label>
+      <div class="datebox"><input id="p-cancel" type="month" placeholder="2020-01"><button type="button" class="btn clr" data-act="clearDate" data-for="p-cancel" hidden>지우기</button></div>
+    </div>
     <label>메모<textarea id="p-memo" rows="2" placeholder="예: 자동이체 할인 -300원, 카드 5% 할인"></textarea></label>
   </details>
 

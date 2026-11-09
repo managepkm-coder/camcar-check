@@ -480,3 +480,19 @@ table.cov{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 .crow-dup{grid-column:2;font-size:12px;color:var(--mute)}
 
 body.ro [data-act=addCover], body.ro [data-act=pasteCovers]{display:none !important}
+
+/* ── 해지 날짜 고치기 ── */
+.field{margin-bottom:12px}
+.field>label{margin-bottom:6px}
+.datebox{display:flex;gap:8px;align-items:stretch}
+.datebox input{flex:1;min-width:0}
+.datebox .clr{flex:none;padding:0 14px;font-size:14px}
+details.more .datebox .clr{background:var(--card)}
+.cplan{flex-wrap:wrap}
+.cplan-b{display:flex;gap:6px;flex:none;margin-left:auto}
+.cplan .btn.alt{background:none;color:var(--danger);box-shadow:inset 0 0 0 1px var(--danger)}
+.cplan.done{border-color:var(--hair);background:var(--bg)}
+.cplan.done b{color:var(--fg)}
+.cplan.done .btn{background:var(--fg);color:var(--card)}
+.cplan.done .btn.alt{background:none;color:var(--fg);box-shadow:inset 0 0 0 1px var(--mute)}
+body.ro [data-act=clearDate], body.ro [data-act=pickDate], body.ro [data-act=undoCancel]{display:none !important}
