@@ -146,11 +146,13 @@
   <div class="pclaims" id="p-alarms" hidden></div>
   <div class="pclaims" id="p-claims" hidden></div>
 
-  <p class="err" id="p-err" role="alert"></p>
-  <div class="actions">
-    <button type="button" class="btn danger" data-act="deletePolicy" id="pDel">삭제</button>
-    <button type="button" class="btn" data-close>취소</button>
-    <button type="submit" class="btn primary">저장</button>
+  <div class="pfoot">
+    <p class="err" id="p-err" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn danger" data-act="deletePolicy" id="pDel">삭제</button>
+      <button type="button" class="btn" data-close>취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
   </div>
 </form>
 </dialog>
@@ -430,7 +432,7 @@
 </div>
 </dialog>
 
-<div id="toast" role="status" hidden></div>
+<div id="toast" role="status" popover="manual" hidden></div>
 <input type="file" id="scanFile" accept="image/*" multiple hidden>
 <input type="file" id="coverFile" accept="image/*" multiple hidden>
 <datalist id="insurerList"></datalist>

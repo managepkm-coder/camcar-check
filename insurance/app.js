@@ -702,6 +702,7 @@ function openPolicy(id) {
   renderPolicyClaims();
   $('#pScan').hidden = !!editing;
   $('#p-err').textContent = '';
+  $$('#fPolicy .bad').forEach((el) => el.classList.remove('bad'));
   $$('#fPolicy input, #fPolicy select, #fPolicy textarea').forEach((el) => { el.disabled = RO; }); // 보기만 하는 중에만 잠근다
   fromEnd(); syncOpen(); premiumHint(); syncClearBtns();
   if (RO) $('#p-more').open = true;
@@ -842,9 +843,29 @@ function policyError(p, open) {
     : '';
 }
 
+/** 저장이 막힌 이유를 놓치지 않게: 그 칸을 빨갛게 표시하고 그리로 옮긴 뒤, 아래 고정된 저장 버튼 위와 알림으로도 알린다 */
+const ERR_FIELD = [[/보험사/, ['p-insurer']], [/납입액/, ['p-premium', 'p-lump']], [/시작보다/, ['p-start', 'p-end']], [/납입 끝 월/, ['p-end', 'p-years']]];
+function showPolicyError(err) {
+  $('#p-err').textContent = `저장하지 못했어요 · ${err}`;
+  const ids = (ERR_FIELD.find(([re]) => re.test(err)) || [, []])[1];
+  ids.forEach((id) => $(`#${id}`).classList.add('bad'));
+  const first = ids.length && $(`#${ids[0]}`);
+  if (first) { first.scrollIntoView({ block: 'center' }); try { first.focus({ preventScroll: true }); } catch {} }
+  toast(err);
+}
+$('#fPolicy').addEventListener('input', (e) => { if (e.target.classList) e.target.classList.remove('bad'); });
+$('#fPolicy').addEventListener('change', (e) => { if (e.target.classList) e.target.classList.remove('bad'); });
+
 $('#fPolicy').addEventListener('submit', (e) => {
   e.preventDefault();
   if (RO) return;
+  try { savePolicyForm(); }
+  catch (err) { // 폰에서만 생기는 문제도 알 수 있게 내용을 보여 준다
+    $('#p-err').textContent = `저장하다 문제가 생겼어요: ${(err && err.message) || err}`;
+    alert(`저장하다 문제가 생겼어요.\n${(err && err.message) || err}\n\n이 화면을 캡처해서 알려 주세요.`);
+  }
+});
+function savePolicyForm() {
   const v = (f) => $(`#p-${f}`).value.trim();
   const open = $('#p-open').checked;
   const p = {
@@ -861,7 +882,7 @@ $('#fPolicy').addEventListener('submit', (e) => {
   };
   if (!p.name && p.insurer) p.name = `${p.insurer.replace(/(생명|화재|손해보험|라이프)$/, '')} ${p.type}`.trim();
   const err = policyError(p, open);
-  if (err) { $('#p-err').textContent = err; return; }
+  if (err) { showPolicyError(err); return; }
   const oldPlan = editing ? editing.cancelPlan || '' : '';
   // 납입액을 바꿨으면: 보험료가 오른 것인지(그 전은 예전 금액 유지), 처음부터 잘못 넣은 것인지 묻는다
   if (editing && editing.premium && p.premium && p.premium !== editing.premium && ym(editing.start) != null && ym(editing.start) < NOW
@@ -877,8 +898,9 @@ $('#fPolicy').addEventListener('submit', (e) => {
   const target = editing || p;
   const al = syncCancelAlarm(target);
   save(); dlgP.close(); render(); persist();
-  if (al && target.cancelPlan !== oldPlan) showAlarmCal(al, '해지 알림을 만들었어요');
-});
+  if (al && target.cancelPlan !== oldPlan) showAlarmCal(al, oldPlan ? '해지 날짜를 바꿨어요' : '해지 알림을 만들었어요');
+  else toast(`‘${target.name}’ 저장했어요.`);
+}
 
 /** 해지할 날짜 ↔ 해지 알림(보험마다 하나, kind: 'cancel')을 맞춘다. 이미 해지했거나 날짜를 지우면 알림도 지운다 */
 function syncCancelAlarm(p) {
@@ -1481,7 +1503,9 @@ let toastT;
 function toast(text) {
   const t = $('#toast');
   t.textContent = text; t.hidden = false;
-  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3500);
+  if (t.showPopover) try { if (t.matches(':popover-open')) t.hidePopover(); t.showPopover(); } catch {} // 열린 시트 위에 보이게
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { if (t.hidePopover) try { t.hidePopover(); } catch {} t.hidden = true; }, 3500);
 }
 
 /* ── 알림 ──
