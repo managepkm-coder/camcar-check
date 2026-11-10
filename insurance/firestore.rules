@@ -1,0 +1,55 @@
+rules_version = '2';
+// 우리집 보험 — 가족 공유 규칙
+// 장부(households/{hid})는 만든 사람(owner)만 고칠 수 있고, 초대받은 사람(viewers)은 보기만 한다.
+// 초대받은 사람은 유효한 초대 코드가 있을 때 '자기 자신만' viewers 에 넣을 수 있고, 스스로 빠질 수 있다.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+
+    match /households/{hid} {
+      allow read: if signedIn() && (resource.data.owner == me() || me() in resource.data.viewers);
+
+      allow create: if signedIn()
+        && request.resource.data.owner == me()
+        && request.resource.data.viewers == []
+        && request.resource.data.viewerInfo == {};
+
+      // 주인: 무엇이든 고칠 수 있다 (단, 주인은 바꿀 수 없다)
+      allow update: if signedIn() && resource.data.owner == me()
+        && request.resource.data.owner == resource.data.owner;
+
+      // 초대 코드로 들어오기: viewers 에 자기만 더하고, 자기 이름표만 쓰고, 다른 값은 그대로
+      allow update: if signedIn()
+        && !(me() in resource.data.viewers)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers', 'viewerInfo', 'lastJoin'])
+        && request.resource.data.viewers.toSet().difference(resource.data.viewers.toSet()) == [me()].toSet()
+        && resource.data.viewers.toSet().difference(request.resource.data.viewers.toSet()).size() == 0
+        && request.resource.data.viewerInfo.diff(resource.data.viewerInfo).affectedKeys().hasOnly([me()])
+        && exists(/databases/$(database)/documents/invites/$(request.resource.data.lastJoin))
+        && get(/databases/$(database)/documents/invites/$(request.resource.data.lastJoin)).data.hid == hid
+        && get(/databases/$(database)/documents/invites/$(request.resource.data.lastJoin)).data.expires > request.time;
+
+      // 스스로 빠지기: viewers 에서 자기만 빼고 자기 이름표만 지운다
+      allow update: if signedIn()
+        && me() in resource.data.viewers
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers', 'viewerInfo'])
+        && resource.data.viewers.toSet().difference(request.resource.data.viewers.toSet()) == [me()].toSet()
+        && request.resource.data.viewers.toSet().difference(resource.data.viewers.toSet()).size() == 0
+        && request.resource.data.viewerInfo.diff(resource.data.viewerInfo).affectedKeys().hasOnly([me()]);
+
+      allow delete: if signedIn() && resource.data.owner == me();
+    }
+
+    // 초대 코드: 코드를 아는 로그인한 사람만 하나씩 읽을 수 있다 (목록 조회 불가)
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.owner == me()
+        && get(/databases/$(database)/documents/households/$(request.resource.data.hid)).data.owner == me();
+      allow delete: if signedIn() && resource.data.owner == me();
+    }
+  }
+}
